@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>시오사쿠 재고관리</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+  <style>
+    body { margin:0; font-family: 'Noto Sans KR', sans-serif; background:#FDF6EE; }
+    #root { min-height:100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- 1. React 및 ReactDOM 코어 불러오기 (보안 충돌 없는 주소) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+
+  <!-- 2. Recharts 및 차트용 부속 라이브러리 주입 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+
+  <!-- 3. Babel 최신 스크립트 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+
+  <!-- 4. Supabase 데이터베이스 클라이언트 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- 5. 실동 앱 실행 스크립트 -->
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+    const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
+
+    const BREAD_LIST = [
+     "오사카 시오빵", "오사카 크랙 시오빵", "버터떡", "두바이 시오빵", "멜론 시오빵",
+     "야끼소바 시오빵", "명란 시오빵", "갈릭 시오빵", "쪽파 시오빵",
+     "모카 시오빵", "우유 시오빵", "시오빵 러스크", "미니 쇼쿠판",
+     "딸기 산도", "망고 산도", "멜론 산도", "왁뿌 망고 요거트 시오"
+    ];
+
+    const BRANCH_LIST = ["강동점", "용인점", "하남 신세계", "롯데백화점 청량리점", "대전 신세계점"];
+    const ALL_BRANCHES = "전체 지점";
+
+    const ALIAS = {
+     "오사카 시오빵":"오사카 시오빵","크랙 시오빵":"오사카 크랙 시오빵","오사카 크랙 시오빵":"오사카 크랙 시오빵",
+     "버터떡":"버터떡","두바이 시오빵":"두바이 시오빵","멜론 시오빵":"멜론 시오빵",
+     "야끼소바 시오빵":"야끼소바 시오빵","명란 시오빵":"명란 시오빵","갈릭 시오빵":"갈릭 시오빵",
+     "쪽파 시오빵":"쪽파 시오빵","모카 시오빵":"모카 시오빵","우유 시오빵":"우유 시오빵",
+     "시오빵 러스크":"시오빵 러스크","러스크":"시오빵 러스크",
+     "미니 쇼쿠판":"미니 쇼쿠판","쇼쿠판":"미니 쇼쿠판",
+     "딸기 산도":"딸기 산도","망고 산도":"망고 산도","멜론 산도":"멜론 산도","메론 산도":"멜론 산도",
+     "왁뿌 망고 요거트 시오":"왁뿌 망고 요거트 시오","왁뿌 망고 요거트 시오빵":"왁뿌 망고 요거트 시오",
+     "왁뿌 망고요거트 시오":"왁뿌 망고 요거트 시오","왁뿌망고 요거트 시오":"왁뿌 망고 요거트 시오",
+     "왁뿌망고요거트시오":"왁뿌 망고 요거트 시오","왁뿌 망고 요거트":"왁뿌 망고 요거트 시오",
+     "왁뿌":"왁뿌 망고 요거트 시오","요거트 시오":"왁뿌 망고 요거트 시오","망고 요거트":"왁뿌 망고 요거트 시오",
+    };
+
+    function fuzzyMatch(rawName) {
+     const clean = rawName.replace(/\s+/g," ").trim();
+     if (ALIAS[clean]) return ALIAS[clean];
+     const noSpace = clean.replace(/\s/g,"");
+     for (const [k,v] of Object.entries(ALIAS)) { if (k.replace(/\s/g,"")===noSpace) return v; }
+     for (const [k,v] of Object.entries(ALIAS)) { if (clean.includes(k)||k.includes(clean)) return v; }
+     if (clean.includes("왁뿌")||(clean.includes("망고")&&clean.includes("요거트"))) return "왁뿌 망고 요거트 시오";
+     return null;
+    }
+
+    function parseQty(raw) {
+     if (/품절|소진|완판/.test(raw)) return 0;
+     const nums = raw.replace(/개|진열/g,"").split("+").map(n=>parseInt(n)).filter(n=>!isNaN(n));
+     return nums.reduce((a,b)=>a+b,0);
+    }
+
+    const DAYS = ["일","월","화","수","목","금","토"];
+    const SUPABASE_URL = "https://tpcctqnfrtzfbdktwboa.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_SYTAm88X-7Qk2MwGCFIvKA_AC-1opTW";
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+    async function loadData() {
+     const {data,error}=await supabaseClient
+       .from("inventory_records")
+       .select("record_date,branch,items")
+       .order("record_date",{ascending:true});
+     if (error) throw error;
+     return (data||[]).map(r=>({date:r.record_date,branch:r.branch,items:r.items||{}}));
+    }
+    async function upsertRecord(record) {
+     const {error}=await supabaseClient.from("inventory_records").upsert({
+       record_date:record.date,
+       branch:record.branch,
+       items:record.items,
+       updated_at:new Date().toISOString()
+     },{onConflict:"record_date,branch"});
+     if (error) throw error;
+    }
+    async function deleteRecord(recordDate,recordBranch) {
+     const {error}=await supabaseClient
+       .from("inventory_records")
+       .delete()
+       .eq("record_date",recordDate)
+       .eq("branch",recordBranch);
+     if (error) throw error;
+    }
+
+    function toDateStr(d) { return d.toISOString().split("T")[0]; }
+    function getDayLabel(s) { return DAYS[new Date(s+"T00:00:00").getDay()]; }
+    function isWeekend(s) { const d=new Date(s+"T00:00:00").getDay(); return d===0||d===6; }
+
+    function parseKakao(text) {
+     const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
+     let date = toDateStr(new Date());
+     for (const line of lines) {
+       let m = line.match(/(\d{1,2})월\s*(\d{1,2})일/);
+       if (!m) m = line.match(/(\d{1,2})[.\/\s]\s*(\d{1,2})/);
+       if (m) { date=`${new Date().getFullYear()}-${String(m[1]).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`; break; }
+     }
+     const type = text.includes("마감")?"remaining":"stock";
+     const items={}, unmatched=[];
+     for (const line of lines) {
+       const m=line.match(/^(.+?)\s*\/\s*(.+)$/);
+       if (!m) continue;
+       const mapped=fuzzyMatch(m[1].trim());
+       if (!mapped) { unmatched.push(m[1].trim()); continue; }
+       items[mapped]=parseQty(m[2].trim());
+     }
+     return {date,type,items,unmatched,success:Object.keys(items).length>0};
+    }
+
+    function calcRecommendation(records, targetDate) {
+     const targetDay = new Date(targetDate+"T00:00:00").getDay();
+     const targetIsWeekend = targetDay===0||targetDay===6;
+     const sameDay = records
+       .filter(r=>new Date(r.date+"T00:00:00").getDay()===targetDay)
+       .sort((a,b)=>b.date.localeCompare(a.date))
+       .slice(0,8);
+     const recent4=sameDay.slice(0,4), older4=sameDay.slice(4,8);
+     return BREAD_LIST.map(bread=>{
+       const r4=recent4.filter(r=>r.items?.[bread]);
+       const o4=older4.filter(r=>r.items?.[bread]);
+       if (!r4.length&&!o4.length) return {bread,qty:null,avgSold:null,hasSoldout:false};
+       const avg4=r4.length>0?r4.reduce((s,r)=>s+(r.items[bread].stock-r.items[bread].remaining),0)/r4.length:null;
+       const avgOld=o4.length>0?o4.reduce((s,r)=>s+(r.items[bread].stock-r.items[bread].remaining),0)/o4.length:null;
+       let weightedAvg;
+       if (avg4!==null&&avgOld!==null) weightedAvg=(avg4*2+avgOld)/3;
+       else weightedAvg=avg4!==null?avg4:avgOld;
+       const buffer=targetIsWeekend?1.15:1.10;
+       const soldoutRate=r4.length>0?r4.filter(r=>r.items?.[bread]&&r.items[bread].remaining===0).length/r4.length:0;
+       const final=Math.ceil(weightedAvg*buffer*(soldoutRate>=0.5?1.1:1));
+       return {bread,qty:final,avgSold:Math.round(weightedAvg*10)/10,hasSoldout:soldoutRate>=0.5};
+     });
+    }
+
+    function WasteList({data, label}) {
+     const filtered = data.filter(b=>b.totalWaste>0);
+     if (!filtered.length) return (
+       <div style={{textAlign:"center",color:"#2E7D32",fontSize:13,padding:"12px 0"}}>🎉 {label} 악성재고 없음!</div>
+     );
+     return (
+       <div>
+         {filtered.map((b,i)=>(
+           <div key={b.bread} style={{display:"flex",alignItems:"center",gap:8,marginBottom:9}}>
+             <div style={{width:22,height:22,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0,
+               background:i===0?"#C62828":i===1?"#E53935":i===2?"#EF5350":"#FFCDD2",color:i<3?"#fff":"#C62828"}}>{i+1}</div>
+             <div style={{flex:1}}>
+               <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                 <span style={{fontSize:13}}>{b.bread}</span>
+                 <span style={{fontSize:12}}>
+                   <span style={{color:"#C62828",fontWeight:700}}>평균 {b.avgWaste}개 남음</span>
+                   <span style={{color:"#888"}}> ({b.wasteRate}% 손실)</span>
+                 </span>
+               </div>
+               <div style={{height:5,background:"#F0E4D4",borderRadius:3,overflow:"hidden"}}>
+                 <div style={{height:"100%",width:`${Math.min((b.totalWaste/(filtered[0]?.totalWaste||1))*100,100)}%`,
+                   background:b.wasteRate>=30?"#C62828":b.wasteRate>=15?"#FF7043":"#FFA726",borderRadius:3}}/>
+               </div>
+             </div>
+           </div>
+         ))}
+       </div>
+     );
+    }
+
+    function BakeryApp() {
+     const [records, setRecords] = useState([]);
+     const [loading, setLoading] = useState(true);
+     const [branch, setBranch] = useState(BRANCH_LIST[0]);
+     const [tab, setTab] = useState("record");
+     const [date, setDate] = useState(toDateStr(new Date()));
+     const [inputs, setInputs] = useState(()=>{
+       const obj={}; BREAD_LIST.forEach(b=>{obj[b]={stock:"",remaining:""}}); return obj;
+     });
+     const [saved, setSaved] = useState(false);
+     const [showPaste, setShowPaste] = useState(false);
+     const [pasteText, setPasteText] = useState("");
+     const [parseResult, setParseResult] = useState(null);
+     const [parseError, setParseError] = useState("");
+     const [statsTab, setStatsTab] = useState("sold");
+     const [wasteTab, setWasteTab] = useState("weekday");
+     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+     const [recDate, setRecDate] = useState(toDateStr(new Date(Date.now()+86400000)));
+     const [dbError, setDbError] = useState("");
+     const [saving, setSaving] = useState(false);
+
+     useEffect(()=>{
+       let cancelled=false;
+       loadData()
+         .then(d=>{if(!cancelled){setRecords(d);setDbError("");}})
+         .catch(e=>{if(!cancelled)setDbError(`DB 연결 실패: ${e.message}`);})
+         .finally(()=>{if(!cancelled)setLoading(false);});
+       return ()=>{ cancelled=true; };
+     },[]);
+
+     useEffect(()=>{
+       if (loading) return;
+       const existing=records.find(r=>r.date===date && r.branch===branch);
+       const obj={};
+       BREAD_LIST.forEach(b=>{
+         obj[b]=existing?.items?.[b]
+           ?{stock:String(existing.items[b].stock??""),remaining:String(existing.items[b].remaining??"")}
+           :{stock:"",remaining:""};
+       });
+       setInputs(obj); setSaved(false); setShowDeleteConfirm(false);
+     },[date,branch,loading]);
+
+     function handleInput(bread,field,val){ setInputs(p=>({...p,[bread]:{...p[bread],[field]:val}})); }
+     async function handleSave(){
+       const items={};
+       BREAD_LIST.forEach(b=>{
+         const s=parseInt(inputs[b].stock), r=parseInt(inputs[b].remaining);
+         if (!isNaN(s)&&!isNaN(r)) items[b]={stock:s,remaining:r};
+       });
+       const record={date,branch,items};
+       setSaving(true); setDbError("");
+       try {
+         await upsertRecord(record);
+         const updated=[...records.filter(r=>!(r.date===date && r.branch===branch)),record].sort((a,b)=>a.date.localeCompare(b.date));
+         setRecords(updated); setSaved(true); setTimeout(()=>setSaved(false),2000);
+       } catch(e) { setDbError(`저장 실패: ${e.message}`); }
+       finally { setSaving(false); }
+     }
+
+     async function handleDelete(){
+       setSaving(true); setDbError("");
+       try {
+         await deleteRecord(date,branch);
+         const updated=records.filter(r=>!(r.date===date && r.branch===branch));
+         setRecords(updated);
+         const obj={}; BREAD_LIST.forEach(b=>{obj[b]={stock:"",remaining:""}}); setInputs(obj); setShowDeleteConfirm(false); setSaved(false);
+       } catch(e) { setDbError(`삭제 실패: ${e.message}`); }
+       finally { setSaving(false); }
+     }
+
+     function handleParse(){
+       setParseError(""); setParseResult(null);
+       if (!pasteText.trim()) return;
+       const result=parseKakao(pasteText);
+       if (!result.success){setParseError("품목을 찾지 못했어요. '품목명 / 수량개' 형식인지 확인해주세요."); return;}
+       setParseResult(result);
+     }
+
+     async function applyResult(){
+       if (!parseResult) return;
+       const {date:d,type,items}=parseResult;
+       const existing=records.find(r=>r.date===d && r.branch===branch);
+       const newItems={...(existing?.items||{})};
+       Object.entries(items).forEach(([bread,qty])=>{
+         if (!newItems[bread]) newItems[bread]={stock:0,remaining:0};
+         if (type==="stock") newItems[bread].stock=qty; else newItems[bread].remaining=qty;
+       });
+       const record={date:d,branch,items:newItems};
+       setSaving(true); setDbError("");
+       try {
+         await upsertRecord(record);
+         const updated=[...records.filter(r=>!(r.date===d && r.branch===branch)),record].sort((a,b)=>a.date.localeCompare(b.date));
+         setRecords(updated); setDate(d);
+         const obj={};
+         BREAD_LIST.forEach(b=>{obj[b]=newItems[b]?{stock:String(newItems[b].stock??""),remaining:String(newItems[b].remaining??"")}:{stock:"",remaining:""}}); setInputs(obj); setShowPaste(false); setPasteText(""); setParseResult(null);
+         setSaved(true); setTimeout(()=>setSaved(false),2000);
+       } catch(e) { setDbError(`저장 실패: ${e.message}`); }
+       finally { setSaving(false); }
+     }
+
+     const hasRecord = records.some(r=>r.date===date && r.branch===branch);
+     const filteredRecords = useMemo(()=>branch===ALL_BRANCHES?records:records.filter(r=>r.branch===branch),[records,branch]);
+     const hasEnoughData = filteredRecords.length>=7;
+
+     const soldRanking = useMemo(()=>BREAD_LIST.map(bread=>{
+       const rel=filteredRecords.filter(r=>r.items?.[bread]);
+       if (!rel.length) return {bread,totalSold:0,avgSold:0};
+       const totalSold=rel.reduce((s,r)=>s+(r.items[bread].stock-r.items[bread].remaining),0);
+       return {bread,totalSold,avgSold:Math.round(totalSold/rel.length*10)/10};
+     }).sort((a,b)=>b.totalSold-a.totalSold),[filteredRecords]);
+
+     const wasteByType = useMemo(()=>{
+       const calc=(fn)=>BREAD_LIST.map(bread=>{
+         const rel=filteredRecords.filter(r=>r.items?.[bread]&&fn(r.date));
+         if (!rel.length) return {bread,totalWaste:0,avgWaste:0,wasteRate:0};
+         const totalWaste=rel.reduce((s,r)=>s+r.items[bread].remaining,0);
+         const totalStock=rel.reduce((s,r)=>s+r.items[bread].stock,0);
+         return {bread,totalWaste,avgWaste:Math.round(totalWaste/rel.length*10)/10,
+           wasteRate:totalStock>0?Math.round((totalWaste/totalStock)*100):0};
+       }).sort((a,b)=>b.totalWaste-a.totalWaste);
+       return {weekday:calc(d=>!isWeekend(d)),weekend:calc(d=>isWeekend(d))};
+     },[filteredRecords]);
+
+     const soldoutRanking = useMemo(()=>BREAD_LIST.map(bread=>{
+       const rel=filteredRecords.filter(r=>r.items?.[bread]);
+       if (!rel.length) return {bread,soldoutCount:0,soldoutRate:0,wkdCount:0,wkeCount:0,total:0};
+       const so=rel.filter(r=>r.items[bread].remaining===0);
+       return {bread,soldoutCount:so.length,soldoutRate:Math.round((so.length/rel.length)*100),
+         wkdCount:so.filter(r=>!isWeekend(r.date)).length,
+         wkeCount:so.filter(r=>isWeekend(r.date)).length,total:rel.length};
+     }).filter(b=>b.soldoutCount>0).sort((a,b)=>b.soldoutRate-a.soldoutRate),[filteredRecords]);
+
+     const weekdayStats = useMemo(()=>{
+       const wkd={},wke={};
+       BREAD_LIST.forEach(b=>{wkd[b]={sold:0,count:0};wke[b]={sold:0,count:0}});
+       filteredRecords.forEach(r=>{
+         const wknd=isWeekend(r.date);
+         Object.entries(r.items||{}).forEach(([bread,it])=>{
+           const sold=it.stock-it.remaining;
+           if (wknd){wke[bread].sold+=sold;wke[bread].count++;}
+           else{wkd[bread].sold+=sold;wkd[bread].count++;}
+         });
+       });
+       return BREAD_LIST.map(bread=>({
+         bread,
+         weekdayAvg:wkd[bread].count>0?Math.round(wkd[bread].sold/wkd[bread].count*10)/10:0,
+         weekendAvg:wke[bread].count>0?Math.round(wke[bread].sold/wke[bread].count*10)/10:0,
+       })).sort((a,b)=>(b.weekdayAvg+b.weekendAvg)-(a.weekdayAvg+a.weekendAvg));
+     },[filteredRecords]);
+
+     const recentTrend = useMemo(()=>filteredRecords.slice(-14).map(r=>{
+       let sold=0; Object.values(r.items||{}).forEach(it=>{sold+=it.stock-it.remaining});
+       return {date:r.date.slice(5),총판매:sold,type:isWeekend(r.date)?"주말":"평일"};
+     }),[filteredRecords]);
+
+     const recommendation = useMemo(()=>calcRecommendation(filteredRecords,recDate),[filteredRecords,recDate]);
+
+     const S={
+       card:{background:"#fff",borderRadius:12,padding:16,marginBottom:14,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"},
+       tab:a=>({flex:1,padding:"11px 4px",border:"none",background:"none",color:a?"#8B4513":"#888",fontWeight:a?700:400,fontSize:13,cursor:"pointer",borderBottom:a?"3px solid #8B4513":"3px solid transparent"}),
+       sub:a=>({flex:1,padding:"7px 4px",border:"none",background:a?"#8B4513":"#F5EDE0",color:a?"#fff":"#8B4513",fontWeight:a?700:500,fontSize:11,cursor:"pointer",borderRadius:6}),
+       btn:d=>({width:"100%",padding:"13px",background:d?"#CCC":"linear-gradient(135deg,#8B4513,#C27A3A)",color:"#fff",border:"none",borderRadius:10,fontWeight:700,fontSize:15,cursor:d?"not-allowed":"pointer"}),
+     };
+
+     if (loading) {
+       return (
+         <div style={{fontFamily:"'Noto Sans KR',sans-serif",background:"#FDF6EE",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#8B4513",fontWeight:600}}>
+           불러오는 중...
+         </div>
+       );
+     }
+
+     return (
+       <div style={{fontFamily:"'Noto Sans KR',sans-serif",background:"#FDF6EE",minHeight:"100vh"}}>
+         <div style={{background:"linear-gradient(135deg,#8B4513 0%,#C27A3A 100%)",color:"#fff",padding:"18px 20px 14px"}}>
+           <div style={{fontSize:21,fontWeight:700}}>🍞 시오사쿠 재고관리</div>
+           <div style={{fontSize:12,opacity:0.85,marginTop:2}}>전체 {records.length}건 저장됨 · {branch===ALL_BRANCHES?"전체 지점 통합 보기":`${branch} ${filteredRecords.length}일치`}</div>
+           <div style={{marginTop:10}}>
+             <select value={branch} onChange={e=>{setBranch(e.target.value); setShowPaste(false); setParseResult(null);}}
+               style={{width:"100%",padding:"9px 10px",borderRadius:8,border:"none",fontSize:14,fontWeight:700,color:"#5C3317",background:"#FFF6EA"}}>
+               {BRANCH_LIST.map(b=><option key={b} value={b}>{b}</option>)}
+               <option value={ALL_BRANCHES}>📊 {ALL_BRANCHES} (통합 보기)</option>
+             </select>
+           </div>
+         </div>
+         <div style={{display:"flex",background:"#fff",borderBottom:"2px solid #F0E4D4"}}>
+           {[["record","📋 재고 기록"],["stats","📊 판매 분석"],["rec","🧮 생산량 추천"]].map(([k,l])=>(
+             <button key={k} onClick={()=>setTab(k)} style={S.tab(tab===k)}>{l}</button>
+           ))}
+         </div>
+         <div style={{padding:"16px 14px",maxWidth:700,margin:"0 auto"}}>
+           {dbError && (
+             <div style={{background:"#FFF0F0",border:"1px solid #EF9A9A",color:"#C62828",padding:"10px 12px",borderRadius:8,marginBottom:12,fontSize:13}}>
+               ⚠️ {dbError}<br/><span style={{fontSize:11}}>Supabase에서 테이블 생성 SQL을 먼저 실행했는지 확인해주세요.</span>
+             </div>
+           )}
+           {/* 재고 기록 */}
+           {tab==="record" && branch===ALL_BRANCHES && (
+             <div style={{textAlign:"center",padding:"60px 20px",color:"#A08060"}}>
+               <div style={{fontSize:48}}>🏬</div>
+               <div style={{marginTop:12,fontWeight:600}}>기록할 지점을 선택해주세요</div>
+               <div style={{fontSize:13,marginTop:6}}>"전체 지점"에서는 통합 통계만 볼 수 있어요</div>
+             </div>
+           )}
+           {tab==="record" && branch!==ALL_BRANCHES && (
+             <div>
+               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                 <label style={{fontWeight:600,color:"#5C3317",fontSize:14}}>날짜</label>
+                 <input type="date" value={date} onChange={e=>setDate(e.target.value)}
+                   style={{border:"1.5px solid #D4A97A",borderRadius:8,padding:"6px 10px",fontSize:14,color:"#5C3317"}}/>
+                 <span style={{fontSize:12,color:"#A08060"}}>({getDayLabel(date)}요일)</span>
+                 <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+                   <button onClick={()=>{setShowPaste(!showPaste);setParseResult(null);setParseError("")}}
+                     style={{padding:"7px 12px",background:showPaste?"#8B4513":"#FDF0E4",color:showPaste?"#fff":"#8B4513",border:"1.5px solid #C27A3A",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                     💬 단톡
+                   </button>                   {hasRecord && (
+                     <button onClick={()=>setShowDeleteConfirm(true)}
+                       style={{padding:"7px 12px",background:"#FFF0F0",color:"#C62828",border:"1.5px solid #EF9A9A",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                       🗑️ 삭제
+                     </button>
+                   )}
+                 </div>
+               </div>
+
+               {showDeleteConfirm && (
+                 <div style={{...S.card,border:"2px solid #EF9A9A",background:"#FFF8F8"}}>
+                   <div style={{fontWeight:700,color:"#C62828",marginBottom:6,fontSize:14}}>🗑️ {date} 기록을 삭제할까요?</div>
+                   <div style={{fontSize:13,color:"#888",marginBottom:12}}>삭제하면 복구가 안 돼요!</div>
+                   <div style={{display:"flex",gap:8}}>
+                     <button onClick={handleDelete} style={{flex:1,padding:"10px",background:"#C62828",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:14,cursor:"pointer"}}>네, 삭제할게요</button>
+                     <button onClick={()=>setShowDeleteConfirm(false)} style={{flex:1,padding:"10px",background:"#F5F5F5",color:"#555",border:"none",borderRadius:8,fontWeight:700,fontSize:14,cursor:"pointer"}}>취소</button>
+                   </div>
+                 </div>
+               )}
+
+               {showPaste && (
+                 <div style={{...S.card,border:"2px solid #D4A97A"}}>
+                   <div style={{fontWeight:700,color:"#5C3317",marginBottom:4,fontSize:14}}>💬 카카오톡 메시지 붙여넣기</div>
+                   <div style={{fontSize:12,color:"#C27A3A",marginBottom:10}}>✓ 40+20개→60개 자동계산 &nbsp;✓ 품절→0개 &nbsp;✓ 왁뿌/러스크 자동매칭</div>
+                   <textarea value={pasteText} onChange={e=>setPasteText(e.target.value)}
+                     placeholder={"06 03 오픈\n오사카 시오빵 / 40개+20개\n왁뿌 망고 요거트 시오빵 / 12개+1개\n메론 산도 / 품절"}
+                     style={{width:"100%",height:130,padding:10,border:"1.5px solid #D4A97A",borderRadius:8,fontSize:13,resize:"vertical",boxSizing:"border-box",fontFamily:"inherit",lineHeight:1.6}}/>
+                   <button onClick={handleParse} disabled={!pasteText.trim()} style={{...S.btn(!pasteText.trim()),marginTop:8,padding:"11px",fontSize:14}}>📋 자동으로 채우기</button>
+                   {parseError && <div style={{marginTop:10,color:"#C62828",fontSize:13,background:"#FFF0F0",padding:"8px 12px",borderRadius:8}}>⚠️ {parseError}</div>}
+                   {parseResult && (
+                     <div style={{marginTop:12,background:"#F0FFF4",borderRadius:8,padding:12,border:"1px solid #A5D6A7"}}>
+                       <div style={{fontWeight:700,color:"#2E7D32",marginBottom:8,fontSize:13}}>
+                         ✅ {parseResult.date} ({getDayLabel(parseResult.date)}요일) — {parseResult.type==="stock"?"오픈 입고":"마감 잔여"} {Object.keys(parseResult.items).length}개 품목
+                       </div>
+                       {Object.entries(parseResult.items).map(([bread,qty])=>(
+                         <div key={bread} style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"4px 0",borderBottom:"1px solid #C8E6C9"}}>
+                           <span>{bread}</span>
+                           <span style={{fontWeight:600,color:qty===0?"#C62828":"#2E7D32"}}>{qty===0?"품절(0개)":`${qty}개`}</span>
+                         </div>
+                       ))}
+                       {parseResult.unmatched?.length>0 && (
+                         <div style={{marginTop:8,fontSize:12,color:"#E65100",background:"#FFF3E0",padding:"6px 10px",borderRadius:6}}>⚠️ 매칭 안 된 품목: {parseResult.unmatched.join(", ")}</div>
+                       )}
+                       <button onClick={applyResult} style={{...S.btn(false),marginTop:10,padding:"10px",fontSize:14}}>✅ 적용하기</button>
+                     </div>
+                   )}
+                 </div>
+               )}
+
+               <div style={{display:"grid",gridTemplateColumns:"1fr 90px 90px 65px",gap:6,padding:"8px 10px",background:"#C27A3A",borderRadius:"10px 10px 0 0",color:"#fff",fontWeight:600,fontSize:13}}>
+                 <div>빵 이름</div><div style={{textAlign:"center"}}>입고</div><div style={{textAlign:"center"}}>잔여</div><div style={{textAlign:"center"}}>판매율</div>
+               </div>
+               {BREAD_LIST.map((bread,i)=>{
+                 const s=parseInt(inputs[bread].stock),r=parseInt(inputs[bread].remaining);
+                 const sold=(!isNaN(s)&&!isNaN(r))?s-r:null;
+                 const rate=(sold!==null&&s>0)?Math.round((sold/s)*100):null;
+                 return (
+                   <div key={bread} style={{display:"grid",gridTemplateColumns:"1fr 90px 90px 65px",gap:6,padding:"8px 10px",alignItems:"center",background:i%2===0?"#fff":"#FDF0E4",border:"1px solid #EDD8BF",borderTop:"none"}}>
+                     <div style={{fontWeight:500,color:"#5C3317",fontSize:12,lineHeight:1.4}}>{bread}</div>
+                     <input type="number" min="0" placeholder="0" value={inputs[bread].stock} onChange={e=>handleInput(bread,"stock",e.target.value)}
+                       style={{width:"100%",padding:"5px 4px",border:"1.5px solid #D4A97A",borderRadius:6,fontSize:14,textAlign:"center",background:"#FFFAF5",boxSizing:"border-box"}}/>
+                     <input type="number" min="0" placeholder="0" value={inputs[bread].remaining} onChange={e=>handleInput(bread,"remaining",e.target.value)}
+                       style={{width:"100%",padding:"5px 4px",border:"1.5px solid #D4A97A",borderRadius:6,fontSize:14,textAlign:"center",background:"#FFFAF5",boxSizing:"border-box"}}/>
+                     <div style={{textAlign:"center",fontWeight:700,fontSize:13,color:rate===null?"#CCC":rate>=80?"#2E7D32":rate>=50?"#F57C00":"#C62828"}}>
+                       {rate!==null?`${rate}%`:"-"}
+                     </div>
+                   </div>
+                 );
+               })}
+               <button onClick={handleSave} disabled={saving}
+                 style={{width:"100%",marginTop:14,padding:"13px",background:saved?"#4CAF50":saving?"#AAA":"linear-gradient(135deg,#8B4513,#C27A3A)",color:"#fff",border:"none",borderRadius:10,fontWeight:700,fontSize:16,cursor:saving?"not-allowed":"pointer"}}>
+                 {saving?"저장 중...":saved?"✅ 저장 완료!":"💾 오늘 기록 저장"}
+               </button>
+             </div>
+           )}
+
+           {/* stats 탭 */}
+           {tab==="stats" && (
+             <div>
+                {records.length<2 ? (
+                  <div style={{textAlign:"center",padding:"60px 20px",color:"#A08060"}}>
+                    <div style={{fontSize:48}}>📊</div>
+                    <div style={{marginTop:12,fontWeight:600}}>아직 데이터가 부족해요</div>
+                    <div style={{fontSize:13,marginTop:6}}>2일 이상 기록하면 분석이 시작됩니다</div>
+                  </div>
+                ) : (
+                  <div style={S.card}>
+                     <div style={{fontWeight:700,color:"#5C3317",marginBottom:12,fontSize:14}}>🥇 빵별 총 판매수량 순위</div>
+                     {soldRanking.filter(b=>b.totalSold>0).map((b,i)=>(
+                       <div key={b.bread} style={{display:"flex",alignItems:"center",gap:8,marginBottom:9}}>
+                         <div style={{width:22,height:22,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0,
+                           background:i===0?"#FFD700":i===1?"#C0C0C0":i===2?"#CD7F32":"#EDD8BF",color:i<3?"#fff":"#8B6040"}}>{i+1}</div>
+                         <div style={{flex:1}}>
+                           <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                             <span style={{fontSize:13}}>{b.bread}</span>
+                             <span style={{fontSize:12,color:"#888"}}>총 {b.totalSold}개 &nbsp;<span style={{fontWeight:700,color:"#8B4513"}}>평균 {b.avgSold}개/일</span></span>
+                           </div>
+                           <div style={{height:5,background:"#F0E4D4",borderRadius:3,overflow:"hidden"}}>
+                             <div style={{height:"100%",width:`${Math.min((b.totalSold/(soldRanking[0]?.totalSold||1))*100,100)}%`,background:"#C27A3A",borderRadius:3}}/>
+                           </div>
+                         </div>
+                       </div>
+                     ))}
+                  </div>
+                )}
+             </div>
+           )}
+
+           {/* rec 탭 */}
+           {tab==="rec" && (
+             <div style={S.card}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                  <div style={{fontWeight:700,color:"#5C3317",fontSize:15}}>🧮 생산량 추천</div>
+                  <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+                    <input type="date" value={recDate} onChange={e=>setRecDate(e.target.value)}
+                      style={{border:"1.5px solid #D4A97A",borderRadius:8,padding:"6px 10px",fontSize:13,color:"#5C3317"}}/>
+                    <span style={{fontSize:12,color:"#A08060"}}>({getDayLabel(recDate)}요일)</span>
+                  </div>
+                </div>
+                {!hasEnoughData ? (
+                  <div style={{background:"#FFF8E1",borderRadius:10,padding:"14px 16px",border:"1px solid #FFE082"}}>
+                    <div style={{fontWeight:700,color:"#F57C00",marginBottom:4,fontSize:14}}>⏳ 데이터를 더 쌓아주세요</div>
+                    <div style={{fontSize:13,color:"#795548"}}>7일 이상 기록이 누적되어야 정밀 추천 시스템이 가동됩니다. (현재 {records.length}일 기록됨)</div>
+                  </div>
+                ) : (
+                  (() => {
+                    const withData = recommendation.filter(r=>r.qty!==null);
+                    const withoutData = recommendation.filter(r=>r.qty===null);
+                    if (!withData.length) {
+                      return (
+                        <div style={{background:"#FFF8E1",borderRadius:10,padding:"14px 16px",border:"1px solid #FFE082"}}>
+                          <div style={{fontWeight:700,color:"#F57C00",marginBottom:4,fontSize:14}}>⏳ {getDayLabel(recDate)}요일 데이터가 부족해요</div>
+                          <div style={{fontSize:13,color:"#795548"}}>해당 요일 기록이 아직 없어서 추천을 계산할 수 없어요.</div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div>
+                        <div style={{fontSize:12,color:"#A08060",marginBottom:10}}>최근 {getDayLabel(recDate)}요일 판매 실적 기반 · 품절 이력이 있는 품목은 여유분을 더 반영했어요</div>
+                        {withData.sort((a,b)=>b.qty-a.qty).map(r=>(
+                          <div key={r.bread} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:"#FDF0E4",borderRadius:8,marginBottom:6}}>
+                            <div>
+                              <div style={{fontSize:13,fontWeight:600,color:"#5C3317"}}>
+                                {r.bread}
+                                {r.hasSoldout && <span style={{marginLeft:6,fontSize:11,color:"#C62828",background:"#FFF0F0",padding:"2px 6px",borderRadius:6}}>품절 잦음</span>}
+                              </div>
+                              <div style={{fontSize:11,color:"#A08060",marginTop:2}}>평균 판매 {r.avgSold}개</div>
+                            </div>
+                            <div style={{fontSize:20,fontWeight:700,color:"#8B4513"}}>{r.qty}개</div>
+                          </div>
+                        ))}
+                        {withoutData.length>0 && (
+                          <div style={{marginTop:12,fontSize:12,color:"#A08060"}}>
+                            아직 {getDayLabel(recDate)}요일 기록이 없는 품목: {withoutData.map(r=>r.bread).join(", ")}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()
+                )}
+             </div>
+           )}
+         </div>
+       </div>
+     );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<BakeryApp />);
+  </script>
+</body>
+</html>
