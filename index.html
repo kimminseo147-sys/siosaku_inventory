@@ -27,7 +27,10 @@
   <!-- 4. Supabase 데이터베이스 클라이언트 -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-  <!-- 5. 실동 앱 실행 스크립트 -->
+  <!-- 5. 엑셀 파일 읽기 -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <!-- 6. 앱 실행 스크립트 -->
   <script type="text/babel">
     const { useState, useEffect, useMemo } = React;
     const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
@@ -68,7 +71,7 @@
      const candidates=[];
      products.forEach(p=>{
        candidates.push([p.name,p.name]);
-       (p.aliases||[]).forEach(alias=>candidates.push([alias,p.name]));
+       (Array.isArray(p.aliases)?p.aliases:[]).forEach(alias=>candidates.push([alias,p.name]));
      });
      for (const [k,v] of candidates) { if (normalizeProductName(k).replace(/\s/g,"")===noSpace) return v; }
      for (const [k,v] of Object.entries(STATIC_ALIAS)) { if (k.replace(/\s/g,"")===noSpace) return v; }
@@ -78,6 +81,21 @@
      }
      for (const [k,v] of Object.entries(STATIC_ALIAS)) { if (clean.includes(k)||k.includes(clean)) return v; }
      if (clean.includes("왁뿌")||(clean.includes("망고")&&clean.includes("요거트"))) return "왁뿌 망고 요거트 시오";
+     return null;
+    }
+    function exactProductMatch(rawName, products) {
+     const clean=normalizeProductName(rawName);
+     const noSpace=clean.replace(/\s/g,"");
+     if (STATIC_ALIAS[clean]) return STATIC_ALIAS[clean];
+     for (const p of products) {
+       if (normalizeProductName(p.name).replace(/\s/g,"")===noSpace) return p.name;
+       for (const alias of (Array.isArray(p.aliases)?p.aliases:[])) {
+         if (normalizeProductName(alias).replace(/\s/g,"")===noSpace) return p.name;
+       }
+     }
+     for (const [alias,name] of Object.entries(STATIC_ALIAS)) {
+       if (alias.replace(/\s/g,"")===noSpace) return name;
+     }
      return null;
     }
 
@@ -116,7 +134,12 @@
      return data||[];
     }
     async function registerProducts(names) {
-     const rows=[...new Set(names.map(normalizeProductName).filter(Boolean))].map(name=>({name,active:true}));
+     const rows=[...new Set(names.map(normalizeProductName).filter(Boolean))].map(name=>({
+       name,
+       category:getProductCategory(name),
+       aliases:[],
+       active:true
+     }));
      if (!rows.length) return [];
      const {data,error}=await supabaseClient
        .from("products")
@@ -124,6 +147,13 @@
        .select("name,aliases,active");
      if (error) throw error;
      return data||rows.map(r=>({...r,aliases:[]}));
+    }
+    function getProductCategory(name) {
+     if (name.includes("산도")) return "산도";
+     if (name.includes("러스크")) return "러스크";
+     if (name.includes("쇼쿠판")) return "식빵";
+     if (name.includes("버터떡")) return "디저트";
+     return "시오빵";
     }
     async function upsertRecord(record) {
      const {error}=await supabaseClient.from("inventory_records").upsert({
@@ -146,9 +176,110 @@
      if (error) throw error;
     }
 
-    function toDateStr(d) { return d.toISOString().split("T")[0]; }
+    async function insertRecords(records) {
+     if (!records.length) return;
+     const rows=records.map(record=>({
+       record_date:record.date,
+       branch:record.branch,
+       items:record.items,
+       remaining_source:record.remaining_source||null,
+       remaining_time:record.remaining_time||null,
+       is_estimated_close:Boolean(record.is_estimated_close),
+       updated_at:new Date().toISOString()
+     }));
+     for (let i=0;i<rows.length;i+=50) {
+       const {error}=await supabaseClient.from("inventory_records").insert(rows.slice(i,i+50));
+       if (error) throw error;
+     }
+    }
+
+    function toDateStr(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
     function getDayLabel(s) { return DAYS[new Date(s+"T00:00:00").getDay()]; }
     function isWeekend(s) { const d=new Date(s+"T00:00:00").getDay(); return d===0||d===6; }
+    function hasValidDemand(item) {
+     return item&&Number.isFinite(item.stock)&&Number.isFinite(item.remaining)&&item.stock>=0&&item.remaining>=0&&item.remaining<=item.stock;
+    }
+    function excelDateToString(value) {
+     if (value instanceof Date&&!isNaN(value)) return toDateStr(value);
+     if (typeof value==="number"&&Number.isFinite(value)) {
+       const parsed=window.XLSX.SSF.parse_date_code(value);
+       if (parsed) return `${parsed.y}-${String(parsed.m).padStart(2,"0")}-${String(parsed.d).padStart(2,"0")}`;
+     }
+     const text=String(value??"").trim();
+     let m=text.match(/^(\d{4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})/);
+     if (!m) m=text.match(/^(\d{1,2})[-./월]\s*(\d{1,2})/);
+     if (!m) return null;
+     const y=m.length===4?Number(m[1]):new Date().getFullYear();
+     const month=m.length===4?Number(m[2]):Number(m[1]);
+     const day=m.length===4?Number(m[3]):Number(m[2]);
+     const result=`${y}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+     return isNaN(new Date(result+"T00:00:00").getTime())?null:result;
+    }
+    function parseExcelNumber(value) {
+     if (value===null||value===undefined||String(value).trim()==="") return null;
+     if (typeof value==="string"&&/품절|소진|완판/.test(value)) return 0;
+     const n=Number(String(value).replace(/개|,/g,"").trim());
+     return Number.isFinite(n)&&n>=0?n:null;
+    }
+    function parseInventoryWorkbook(file, cutoffDate, targetBranch, existingRecords, existingProducts) {
+     return new Promise((resolve,reject)=>{
+       const reader=new FileReader();
+       reader.onerror=()=>reject(new Error("엑셀파일을 읽지 못했습니다."));
+       reader.onload=e=>{
+         try {
+           const workbook=window.XLSX.read(e.target.result,{type:"array",cellDates:true});
+           const sheet=workbook.Sheets["재고 데이터"]||workbook.Sheets[workbook.SheetNames[0]];
+           if (!sheet) throw new Error("엑셀에서 데이터 시트를 찾지 못했습니다.");
+           const rows=window.XLSX.utils.sheet_to_json(sheet,{header:1,defval:null,raw:true});
+           const headerIndex=rows.findIndex(row=>row.some(v=>String(v??"").trim()==="날짜")&&row.some(v=>String(v??"").trim()==="상품명"));
+           if (headerIndex<0) throw new Error("'날짜·상품명·오픈재고·잔여재고' 머리글을 찾지 못했습니다.");
+           const headers=rows[headerIndex].map(v=>String(v??"").trim());
+           const idx={date:headers.indexOf("날짜"),product:headers.indexOf("상품명"),stock:headers.indexOf("오픈재고"),remaining:headers.indexOf("잔여재고")};
+           if (Object.values(idx).some(v=>v<0)) throw new Error("필수 열이 없습니다. 날짜, 상품명, 오픈재고, 잔여재고가 필요합니다.");
+           const grouped=new Map();
+           const productNames=new Set();
+           const warnings=[];
+           let sourceRows=0,excludedAfterCutoff=0,invalidRows=0,openMissing=0,closeMissing=0,zeroOpen=0,stockouts=0;
+           rows.slice(headerIndex+1).forEach((row,offset)=>{
+             const excelRow=headerIndex+2+offset;
+             const recordDate=excelDateToString(row[idx.date]);
+             const rawProduct=normalizeProductName(String(row[idx.product]??""));
+             const product=rawProduct?(exactProductMatch(rawProduct,existingProducts)||rawProduct):"";
+             if (!recordDate&&!rawProduct) return;
+             if (!recordDate||!rawProduct) {invalidRows++;warnings.push(`${excelRow}행: 날짜 또는 상품명 누락`);return;}
+             if (recordDate>cutoffDate) {excludedAfterCutoff++;return;}
+             const stock=parseExcelNumber(row[idx.stock]);
+             const remaining=parseExcelNumber(row[idx.remaining]);
+             if (stock===null) openMissing++;
+             if (remaining===null) closeMissing++;
+             if (stock===0) zeroOpen++;
+             if (stock!==null&&stock>0&&remaining===0) stockouts++;
+             if (stock!==null&&remaining!==null&&remaining>stock) warnings.push(`${excelRow}행: ${product} 잔여재고가 오픈재고보다 큼`);
+             if (!grouped.has(recordDate)) grouped.set(recordDate,{});
+             grouped.get(recordDate)[product]={
+               stock,
+               remaining,
+               stockout:stock!==null&&stock>0&&remaining===0,
+               no_delivery:stock===0,
+               missing_open:stock===null,
+               missing_close:remaining===null
+             };
+             productNames.add(product); sourceRows++;
+           });
+           const existingKeys=new Set(existingRecords.map(r=>`${r.date}|||${r.branch}`));
+           const allRecords=[...grouped.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([recordDate,items])=>({
+             date:recordDate,branch:targetBranch,items,
+             remaining_source:"엑셀 일괄등록",remaining_time:null,is_estimated_close:false
+           }));
+           const skippedRecords=allRecords.filter(r=>existingKeys.has(`${r.date}|||${r.branch}`));
+           const newRecords=allRecords.filter(r=>!existingKeys.has(`${r.date}|||${r.branch}`));
+           resolve({fileName:file.name,sourceRows,excludedAfterCutoff,invalidRows,openMissing,closeMissing,zeroOpen,stockouts,
+             allRecords,newRecords,skippedRecords,productNames:[...productNames].sort((a,b)=>a.localeCompare(b,"ko")),warnings});
+         } catch(error) {reject(error);}
+       };
+       reader.readAsArrayBuffer(file);
+     });
+    }
 
     function parseKakao(text, products) {
      const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
@@ -188,8 +319,8 @@
        .slice(0,8);
      const recent4=sameDay.slice(0,4), older4=sameDay.slice(4,8);
      return breadList.map(bread=>{
-       const r4=recent4.filter(r=>r.items?.[bread]);
-       const o4=older4.filter(r=>r.items?.[bread]);
+       const r4=recent4.filter(r=>hasValidDemand(r.items?.[bread])&&r.items[bread].stock>0);
+       const o4=older4.filter(r=>hasValidDemand(r.items?.[bread])&&r.items[bread].stock>0);
        if (!r4.length&&!o4.length) return {bread,qty:null,avgSold:null,hasSoldout:false};
        const avg4=r4.length>0?r4.reduce((s,r)=>s+(r.items[bread].stock-r.items[bread].remaining),0)/r4.length:null;
        const avgOld=o4.length>0?o4.reduce((s,r)=>s+(r.items[bread].stock-r.items[bread].remaining),0)/o4.length:null;
@@ -243,6 +374,13 @@
      const [inputs, setInputs] = useState({});
      const [saved, setSaved] = useState(false);
      const [showPaste, setShowPaste] = useState(false);
+     const [showExcelImport, setShowExcelImport] = useState(false);
+     const [excelBranch, setExcelBranch] = useState("하남 신세계");
+     const [excelCutoff, setExcelCutoff] = useState("2026-07-31");
+     const [excelPreview, setExcelPreview] = useState(null);
+     const [excelError, setExcelError] = useState("");
+     const [excelImporting, setExcelImporting] = useState(false);
+     const [excelResult, setExcelResult] = useState(null);
      const [pasteText, setPasteText] = useState("");
      const [parseResult, setParseResult] = useState(null);
      const [parseError, setParseError] = useState("");
@@ -280,6 +418,41 @@
      },[date,branch,loading,BREAD_LIST,records]);
 
      function handleInput(bread,field,val){ setInputs(p=>({...p,[bread]:{...p[bread],[field]:val}})); }
+     async function handleExcelFile(event) {
+       const file=event.target.files?.[0];
+       setExcelPreview(null);setExcelResult(null);setExcelError("");
+       if (!file) return;
+       try {
+         const preview=await parseInventoryWorkbook(file,excelCutoff,excelBranch,records,products);
+         if (!preview.allRecords.length) throw new Error("선택한 기간에 등록할 데이터가 없습니다.");
+         setExcelPreview(preview);
+       } catch(error) {setExcelError(error.message);}
+       finally {event.target.value="";}
+     }
+     async function applyExcelImport() {
+       if (!excelPreview||excelImporting) return;
+       if (!excelPreview.newRecords.length) {setExcelResult({inserted:0,skipped:excelPreview.skippedRecords.length,newProducts:0});return;}
+       const known=new Set(products.map(p=>p.name));
+       const newNames=excelPreview.productNames.filter(name=>!known.has(name));
+       if (!window.confirm(`${excelBranch}에 ${excelPreview.newRecords.length}일치 데이터를 등록합니다.\n기존 ${excelPreview.skippedRecords.length}일치는 건너뜁니다.\n\n계속할까요?`)) return;
+       setExcelImporting(true);setExcelError("");setDbError("");
+       try {
+         let registered=[];
+         if (newNames.length) registered=await registerProducts(newNames);
+         await insertRecords(excelPreview.newRecords);
+         if (registered.length) {
+           setProducts(prev=>{
+             const byName=new Map(prev.map(p=>[p.name,p]));
+             registered.forEach(p=>byName.set(p.name,{...p,aliases:p.aliases||[],active:true}));
+             return [...byName.values()].sort((a,b)=>a.name.localeCompare(b.name,"ko"));
+           });
+         }
+         setRecords(prev=>[...prev,...excelPreview.newRecords].sort((a,b)=>a.date.localeCompare(b.date)||a.branch.localeCompare(b.branch,"ko")));
+         setExcelResult({inserted:excelPreview.newRecords.length,skipped:excelPreview.skippedRecords.length,newProducts:newNames.length});
+         setExcelPreview(null);
+       } catch(error) {setExcelError(`일괄 등록 실패: ${error.message}`);}
+       finally {setExcelImporting(false);}
+     }
      async function handleSave(){
        const items={};
        BREAD_LIST.forEach(b=>{
@@ -361,7 +534,7 @@
      const hasEnoughData = filteredRecords.length>=7;
 
      const soldRanking = useMemo(()=>BREAD_LIST.map(bread=>{
-       const rel=filteredRecords.filter(r=>r.items?.[bread]);
+       const rel=filteredRecords.filter(r=>hasValidDemand(r.items?.[bread])&&r.items[bread].stock>0);
        if (!rel.length) return {bread,totalSold:0,avgSold:0};
        const totalSold=rel.reduce((s,r)=>s+(r.items[bread].stock-r.items[bread].remaining),0);
        return {bread,totalSold,avgSold:Math.round(totalSold/rel.length*10)/10};
@@ -369,7 +542,7 @@
 
      const wasteByType = useMemo(()=>{
        const calc=(fn)=>BREAD_LIST.map(bread=>{
-         const rel=filteredRecords.filter(r=>r.items?.[bread]&&fn(r.date));
+         const rel=filteredRecords.filter(r=>hasValidDemand(r.items?.[bread])&&r.items[bread].stock>0&&fn(r.date));
          if (!rel.length) return {bread,totalWaste:0,avgWaste:0,wasteRate:0};
          const totalWaste=rel.reduce((s,r)=>s+r.items[bread].remaining,0);
          const totalStock=rel.reduce((s,r)=>s+r.items[bread].stock,0);
@@ -380,7 +553,7 @@
      },[filteredRecords,BREAD_LIST]);
 
      const soldoutRanking = useMemo(()=>BREAD_LIST.map(bread=>{
-       const rel=filteredRecords.filter(r=>r.items?.[bread]);
+       const rel=filteredRecords.filter(r=>hasValidDemand(r.items?.[bread])&&r.items[bread].stock>0);
        if (!rel.length) return {bread,soldoutCount:0,soldoutRate:0,wkdCount:0,wkeCount:0,total:0};
        const so=rel.filter(r=>r.items[bread].remaining===0);
        return {bread,soldoutCount:so.length,soldoutRate:Math.round((so.length/rel.length)*100),
@@ -394,6 +567,7 @@
        filteredRecords.forEach(r=>{
          const wknd=isWeekend(r.date);
          Object.entries(r.items||{}).forEach(([bread,it])=>{
+           if (!wkd[bread]||!wke[bread]||!hasValidDemand(it)||it.stock===0) return;
            const sold=it.stock-it.remaining;
            if (wknd){wke[bread].sold+=sold;wke[bread].count++;}
            else{wkd[bread].sold+=sold;wkd[bread].count++;}
@@ -407,7 +581,7 @@
      },[filteredRecords,BREAD_LIST]);
 
      const recentTrend = useMemo(()=>filteredRecords.slice(-14).map(r=>{
-       let sold=0; Object.values(r.items||{}).forEach(it=>{sold+=it.stock-it.remaining});
+       let sold=0; Object.values(r.items||{}).forEach(it=>{if(hasValidDemand(it)&&it.stock>0)sold+=it.stock-it.remaining});
        return {date:r.date.slice(5),총판매:sold,type:isWeekend(r.date)?"주말":"평일"};
      }),[filteredRecords]);
 
@@ -434,7 +608,7 @@
            <div style={{fontSize:21,fontWeight:700}}>🍞 시오사쿠 재고관리</div>
            <div style={{fontSize:12,opacity:0.85,marginTop:2}}>전체 {records.length}건 저장됨 · {branch===ALL_BRANCHES?"전체 지점 통합 보기":`${branch} ${filteredRecords.length}일치`}</div>
            <div style={{marginTop:10}}>
-             <select value={branch} onChange={e=>{setBranch(e.target.value); setShowPaste(false); setParseResult(null);}}
+             <select value={branch} onChange={e=>{setBranch(e.target.value);setShowPaste(false);setShowExcelImport(false);setParseResult(null);}}
                style={{width:"100%",padding:"9px 10px",borderRadius:8,border:"none",fontSize:14,fontWeight:700,color:"#5C3317",background:"#FFF6EA"}}>
                {BRANCH_LIST.map(b=><option key={b} value={b}>{b}</option>)}
                <option value={ALL_BRANCHES}>📊 {ALL_BRANCHES} (통합 보기)</option>
@@ -468,10 +642,15 @@
                    style={{border:"1.5px solid #D4A97A",borderRadius:8,padding:"6px 10px",fontSize:14,color:"#5C3317"}}/>
                  <span style={{fontSize:12,color:"#A08060"}}>({getDayLabel(date)}요일)</span>
                  <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-                   <button onClick={()=>{setShowPaste(!showPaste);setParseResult(null);setParseError("")}}
+                   <button onClick={()=>{setShowPaste(!showPaste);setShowExcelImport(false);setParseResult(null);setParseError("")}}
                      style={{padding:"7px 12px",background:showPaste?"#8B4513":"#FDF0E4",color:showPaste?"#fff":"#8B4513",border:"1.5px solid #C27A3A",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
                      💬 단톡
-                   </button>                   {hasRecord && (
+                   </button>
+                   <button onClick={()=>{setShowExcelImport(!showExcelImport);setShowPaste(false);setExcelPreview(null);setExcelError("");setExcelResult(null)}}
+                     style={{padding:"7px 12px",background:showExcelImport?"#2E7D32":"#F0FFF4",color:showExcelImport?"#fff":"#2E7D32",border:"1.5px solid #66BB6A",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                     엑셀
+                   </button>
+                   {hasRecord && (
                      <button onClick={()=>setShowDeleteConfirm(true)}
                        style={{padding:"7px 12px",background:"#FFF0F0",color:"#C62828",border:"1.5px solid #EF9A9A",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
                        🗑️ 삭제
@@ -494,6 +673,61 @@
                      <button onClick={handleDelete} style={{flex:1,padding:"10px",background:"#C62828",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:14,cursor:"pointer"}}>네, 삭제할게요</button>
                      <button onClick={()=>setShowDeleteConfirm(false)} style={{flex:1,padding:"10px",background:"#F5F5F5",color:"#555",border:"none",borderRadius:8,fontWeight:700,fontSize:14,cursor:"pointer"}}>취소</button>
                    </div>
+                 </div>
+               )}
+
+               {showExcelImport && (
+                 <div style={{...S.card,border:"2px solid #81C784",background:"#FBFFFC"}}>
+                   <div style={{fontWeight:700,color:"#1B5E20",marginBottom:4,fontSize:14}}>엑셀 일괄 등록</div>
+                   <div style={{fontSize:12,color:"#558B2F",marginBottom:12}}>기존 날짜는 덮어쓰지 않고 자동으로 건너뜁니다.</div>
+                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                     <label style={{fontSize:12,color:"#5C3317"}}>등록 지점
+                       <select value={excelBranch} onChange={e=>{setExcelBranch(e.target.value);setExcelPreview(null);setExcelResult(null)}}
+                         style={{display:"block",width:"100%",marginTop:4,padding:"8px",border:"1px solid #A5D6A7",borderRadius:7,background:"#fff"}}>
+                         {BRANCH_LIST.map(b=><option key={b} value={b}>{b}</option>)}
+                       </select>
+                     </label>
+                     <label style={{fontSize:12,color:"#5C3317"}}>마지막 등록 날짜
+                       <input type="date" value={excelCutoff} onChange={e=>{setExcelCutoff(e.target.value);setExcelPreview(null);setExcelResult(null)}}
+                         style={{display:"block",width:"100%",boxSizing:"border-box",marginTop:4,padding:"7px",border:"1px solid #A5D6A7",borderRadius:7,background:"#fff"}}/>
+                     </label>
+                   </div>
+                   <label style={{display:"block",padding:"12px",border:"2px dashed #81C784",borderRadius:8,textAlign:"center",color:"#2E7D32",fontSize:13,fontWeight:600,cursor:"pointer",background:"#F1F8E9"}}>
+                     엑셀파일 선택
+                     <input type="file" accept=".xlsx,.xls" onChange={handleExcelFile} style={{display:"none"}}/>
+                   </label>
+                   {excelError && <div style={{marginTop:10,color:"#C62828",fontSize:12,background:"#FFF0F0",padding:"9px 10px",borderRadius:7}}>⚠️ {excelError}</div>}
+                   {excelPreview && (
+                     <div style={{marginTop:12,border:"1px solid #A5D6A7",borderRadius:8,padding:12,background:"#fff"}}>
+                       <div style={{fontWeight:700,color:"#2E7D32",fontSize:13,marginBottom:8}}>{excelPreview.fileName}</div>
+                       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 12px",fontSize:12,color:"#555"}}>
+                         <div>품목 행 <b>{excelPreview.sourceRows}개</b></div>
+                         <div>대상 날짜 <b>{excelPreview.allRecords.length}일</b></div>
+                         <div style={{color:"#2E7D32"}}>새로 등록 <b>{excelPreview.newRecords.length}일</b></div>
+                         <div style={{color:"#F57C00"}}>기존 날짜 건너뜀 <b>{excelPreview.skippedRecords.length}일</b></div>
+                         <div>신규 포함 품목 <b>{excelPreview.productNames.length}종</b></div>
+                         <div>기간 이후 제외 <b>{excelPreview.excludedAfterCutoff}행</b></div>
+                         <div>오픈 공란 <b>{excelPreview.openMissing}행</b></div>
+                         <div>마감 공란 <b>{excelPreview.closeMissing}행</b></div>
+                         <div>미입고(오픈 0) <b>{excelPreview.zeroOpen}행</b></div>
+                         <div>품절 기록 <b>{excelPreview.stockouts}행</b></div>
+                       </div>
+                       {excelPreview.warnings.length>0 && (
+                         <div style={{marginTop:8,fontSize:11,color:"#E65100",background:"#FFF3E0",padding:"7px 9px",borderRadius:6}}>
+                           검토 필요 {excelPreview.warnings.length}건: {excelPreview.warnings.slice(0,3).join(" · ")}{excelPreview.warnings.length>3?" 외":""}
+                         </div>
+                       )}
+                       <button onClick={applyExcelImport} disabled={excelImporting||!excelPreview.newRecords.length}
+                         style={{...S.btn(excelImporting||!excelPreview.newRecords.length),marginTop:10,padding:"11px",fontSize:14}}>
+                         {excelImporting?"등록 중...":excelPreview.newRecords.length?`${excelPreview.newRecords.length}일치 Supabase에 등록`:"새로 등록할 날짜 없음"}
+                       </button>
+                     </div>
+                   )}
+                   {excelResult && (
+                     <div style={{marginTop:10,color:"#1B5E20",fontSize:12,background:"#E8F5E9",padding:"10px",borderRadius:7}}>
+                       등록 완료: {excelResult.inserted}일 · 기존 날짜 건너뜀: {excelResult.skipped}일 · 신규 상품: {excelResult.newProducts}종
+                     </div>
+                   )}
                  </div>
                )}
 
