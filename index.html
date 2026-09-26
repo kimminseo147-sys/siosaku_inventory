@@ -32,17 +32,18 @@
     const { useState, useEffect, useMemo } = React;
     const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
 
-    const BREAD_LIST = [
-     "오사카 시오빵", "오사카 크랙 시오빵", "버터떡", "두바이 시오빵", "멜론 시오빵",
-     "야끼소바 시오빵", "명란 시오빵", "갈릭 시오빵", "쪽파 시오빵",
+    const DEFAULT_PRODUCTS = [
+     "오사카 시오빵", "오사카 크랙 시오빵", "버터떡", "두바이 시오빵", "불닭 시오빵", "멜론 시오빵",
+     "야끼소바 시오빵", "명란 시오빵", "갈릭 시오빵", "쪽파 시오빵", "피자 시오빵", "앙버터 크림 시오빵",
      "모카 시오빵", "우유 시오빵", "시오빵 러스크", "미니 쇼쿠판",
-     "딸기 산도", "망고 산도", "멜론 산도", "왁뿌 망고 요거트 시오"
+     "딸기 산도", "망고 산도", "멜론 산도", "복숭아 요거트 산도", "후르츠 산도",
+     "얼그레이 무화과 산도", "초코 바나나 산도", "왁뿌 망고 요거트 시오"
     ];
 
     const BRANCH_LIST = ["강동점", "용인점", "하남 신세계", "롯데백화점 청량리점", "대전 신세계점"];
     const ALL_BRANCHES = "전체 지점";
 
-    const ALIAS = {
+    const STATIC_ALIAS = {
      "오사카 시오빵":"오사카 시오빵","크랙 시오빵":"오사카 크랙 시오빵","오사카 크랙 시오빵":"오사카 크랙 시오빵",
      "버터떡":"버터떡","두바이 시오빵":"두바이 시오빵","멜론 시오빵":"멜론 시오빵",
      "야끼소바 시오빵":"야끼소바 시오빵","명란 시오빵":"명란 시오빵","갈릭 시오빵":"갈릭 시오빵",
@@ -56,12 +57,26 @@
      "왁뿌":"왁뿌 망고 요거트 시오","요거트 시오":"왁뿌 망고 요거트 시오","망고 요거트":"왁뿌 망고 요거트 시오",
     };
 
-    function fuzzyMatch(rawName) {
+    function normalizeProductName(rawName) {
+     return rawName.replace(/\s+/g," ").trim();
+    }
+
+    function fuzzyMatch(rawName, products) {
      const clean = rawName.replace(/\s+/g," ").trim();
-     if (ALIAS[clean]) return ALIAS[clean];
+     if (STATIC_ALIAS[clean]) return STATIC_ALIAS[clean];
      const noSpace = clean.replace(/\s/g,"");
-     for (const [k,v] of Object.entries(ALIAS)) { if (k.replace(/\s/g,"")===noSpace) return v; }
-     for (const [k,v] of Object.entries(ALIAS)) { if (clean.includes(k)||k.includes(clean)) return v; }
+     const candidates=[];
+     products.forEach(p=>{
+       candidates.push([p.name,p.name]);
+       (p.aliases||[]).forEach(alias=>candidates.push([alias,p.name]));
+     });
+     for (const [k,v] of candidates) { if (normalizeProductName(k).replace(/\s/g,"")===noSpace) return v; }
+     for (const [k,v] of Object.entries(STATIC_ALIAS)) { if (k.replace(/\s/g,"")===noSpace) return v; }
+     for (const [k,v] of candidates) {
+       const candidate=normalizeProductName(k);
+       if (candidate.length>=2&&(clean.includes(candidate)||candidate.includes(clean))) return v;
+     }
+     for (const [k,v] of Object.entries(STATIC_ALIAS)) { if (clean.includes(k)||k.includes(clean)) return v; }
      if (clean.includes("왁뿌")||(clean.includes("망고")&&clean.includes("요거트"))) return "왁뿌 망고 요거트 시오";
      return null;
     }
@@ -69,6 +84,7 @@
     function parseQty(raw) {
      if (/품절|소진|완판/.test(raw)) return 0;
      const nums = raw.replace(/개|진열/g,"").split("+").map(n=>parseInt(n)).filter(n=>!isNaN(n));
+     if (!nums.length) return null;
      return nums.reduce((a,b)=>a+b,0);
     }
 
@@ -84,6 +100,25 @@
        .order("record_date",{ascending:true});
      if (error) throw error;
      return (data||[]).map(r=>({date:r.record_date,branch:r.branch,items:r.items||{}}));
+    }
+    async function loadProducts() {
+     const {data,error}=await supabaseClient
+       .from("products")
+       .select("name,aliases,active")
+       .eq("active",true)
+       .order("name",{ascending:true});
+     if (error) throw error;
+     return data||[];
+    }
+    async function registerProducts(names) {
+     const rows=[...new Set(names.map(normalizeProductName).filter(Boolean))].map(name=>({name,active:true}));
+     if (!rows.length) return [];
+     const {data,error}=await supabaseClient
+       .from("products")
+       .upsert(rows,{onConflict:"name"})
+       .select("name,aliases,active");
+     if (error) throw error;
+     return data||rows.map(r=>({...r,aliases:[]}));
     }
     async function upsertRecord(record) {
      const {error}=await supabaseClient.from("inventory_records").upsert({
@@ -107,7 +142,7 @@
     function getDayLabel(s) { return DAYS[new Date(s+"T00:00:00").getDay()]; }
     function isWeekend(s) { const d=new Date(s+"T00:00:00").getDay(); return d===0||d===6; }
 
-    function parseKakao(text) {
+    function parseKakao(text, products) {
      const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
      let date = toDateStr(new Date());
      for (const line of lines) {
@@ -116,18 +151,22 @@
        if (m) { date=`${new Date().getFullYear()}-${String(m[1]).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`; break; }
      }
      const type = text.includes("마감")?"remaining":"stock";
-     const items={}, unmatched=[];
+     const items={}, newProducts=[], invalid=[];
      for (const line of lines) {
        const m=line.match(/^(.+?)\s*\/\s*(.+)$/);
        if (!m) continue;
-       const mapped=fuzzyMatch(m[1].trim());
-       if (!mapped) { unmatched.push(m[1].trim()); continue; }
-       items[mapped]=parseQty(m[2].trim());
+       const rawName=normalizeProductName(m[1]);
+       const mapped=fuzzyMatch(rawName,products);
+       const qty=parseQty(m[2].trim());
+       if (!Number.isFinite(qty)) { invalid.push(rawName); continue; }
+       const productName=mapped||rawName;
+       if (!mapped&&!newProducts.includes(productName)) newProducts.push(productName);
+       items[productName]=qty;
      }
-     return {date,type,items,unmatched,success:Object.keys(items).length>0};
+     return {date,type,items,newProducts,invalid,success:Object.keys(items).length>0};
     }
 
-    function calcRecommendation(records, targetDate) {
+    function calcRecommendation(records, targetDate, breadList) {
      const targetDay = new Date(targetDate+"T00:00:00").getDay();
      const targetIsWeekend = targetDay===0||targetDay===6;
      const sameDay = records
@@ -135,7 +174,7 @@
        .sort((a,b)=>b.date.localeCompare(a.date))
        .slice(0,8);
      const recent4=sameDay.slice(0,4), older4=sameDay.slice(4,8);
-     return BREAD_LIST.map(bread=>{
+     return breadList.map(bread=>{
        const r4=recent4.filter(r=>r.items?.[bread]);
        const o4=older4.filter(r=>r.items?.[bread]);
        if (!r4.length&&!o4.length) return {bread,qty:null,avgSold:null,hasSoldout:false};
@@ -183,13 +222,12 @@
 
     function BakeryApp() {
      const [records, setRecords] = useState([]);
+     const [products, setProducts] = useState([]);
      const [loading, setLoading] = useState(true);
      const [branch, setBranch] = useState(BRANCH_LIST[0]);
      const [tab, setTab] = useState("record");
      const [date, setDate] = useState(toDateStr(new Date()));
-     const [inputs, setInputs] = useState(()=>{
-       const obj={}; BREAD_LIST.forEach(b=>{obj[b]={stock:"",remaining:""}}); return obj;
-     });
+     const [inputs, setInputs] = useState({});
      const [saved, setSaved] = useState(false);
      const [showPaste, setShowPaste] = useState(false);
      const [pasteText, setPasteText] = useState("");
@@ -201,11 +239,16 @@
      const [recDate, setRecDate] = useState(toDateStr(new Date(Date.now()+86400000)));
      const [dbError, setDbError] = useState("");
      const [saving, setSaving] = useState(false);
+     const BREAD_LIST = useMemo(()=>products.filter(p=>p.active!==false).map(p=>p.name),[products]);
 
      useEffect(()=>{
        let cancelled=false;
-       loadData()
-         .then(d=>{if(!cancelled){setRecords(d);setDbError("");}})
+       Promise.all([loadData(),loadProducts()])
+         .then(async ([d,p])=>{
+           let productRows=p;
+           if (!productRows.length) productRows=await registerProducts(DEFAULT_PRODUCTS);
+           if(!cancelled){setRecords(d);setProducts(productRows);setDbError("");}
+         })
          .catch(e=>{if(!cancelled)setDbError(`DB 연결 실패: ${e.message}`);})
          .finally(()=>{if(!cancelled)setLoading(false);});
        return ()=>{ cancelled=true; };
@@ -221,13 +264,13 @@
            :{stock:"",remaining:""};
        });
        setInputs(obj); setSaved(false); setShowDeleteConfirm(false);
-     },[date,branch,loading]);
+     },[date,branch,loading,BREAD_LIST,records]);
 
      function handleInput(bread,field,val){ setInputs(p=>({...p,[bread]:{...p[bread],[field]:val}})); }
      async function handleSave(){
        const items={};
        BREAD_LIST.forEach(b=>{
-         const s=parseInt(inputs[b].stock), r=parseInt(inputs[b].remaining);
+         const s=parseInt(inputs[b]?.stock), r=parseInt(inputs[b]?.remaining);
          if (!isNaN(s)&&!isNaN(r)) items[b]={stock:s,remaining:r};
        });
        const record={date,branch,items};
@@ -254,14 +297,15 @@
      function handleParse(){
        setParseError(""); setParseResult(null);
        if (!pasteText.trim()) return;
-       const result=parseKakao(pasteText);
+       const result=parseKakao(pasteText,products);
        if (!result.success){setParseError("품목을 찾지 못했어요. '품목명 / 수량개' 형식인지 확인해주세요."); return;}
        setParseResult(result);
      }
 
      async function applyResult(){
        if (!parseResult) return;
-       const {date:d,type,items}=parseResult;
+       const {date:d,type,items,newProducts=[]}=parseResult;
+       if (newProducts.length&&!window.confirm(`새로운 상품 ${newProducts.length}개가 발견됐어요.\n\n${newProducts.join("\n")}\n\n상품 목록에 등록하고 계속할까요?`)) return;
        const existing=records.find(r=>r.date===d && r.branch===branch);
        const newItems={...(existing?.items||{})};
        Object.entries(items).forEach(([bread,qty])=>{
@@ -271,11 +315,21 @@
        const record={date:d,branch,items:newItems};
        setSaving(true); setDbError("");
        try {
+         let activeBreadList=BREAD_LIST;
+         if (newProducts.length) {
+           const registered=await registerProducts(newProducts);
+           setProducts(prev=>{
+             const byName=new Map(prev.map(p=>[p.name,p]));
+             registered.forEach(p=>byName.set(p.name,{...p,aliases:p.aliases||[],active:true}));
+             return [...byName.values()].sort((a,b)=>a.name.localeCompare(b.name,"ko"));
+           });
+           activeBreadList=[...new Set([...BREAD_LIST,...newProducts])];
+         }
          await upsertRecord(record);
          const updated=[...records.filter(r=>!(r.date===d && r.branch===branch)),record].sort((a,b)=>a.date.localeCompare(b.date));
          setRecords(updated); setDate(d);
          const obj={};
-         BREAD_LIST.forEach(b=>{obj[b]=newItems[b]?{stock:String(newItems[b].stock??""),remaining:String(newItems[b].remaining??"")}:{stock:"",remaining:""}}); setInputs(obj); setShowPaste(false); setPasteText(""); setParseResult(null);
+         activeBreadList.forEach(b=>{obj[b]=newItems[b]?{stock:String(newItems[b].stock??""),remaining:String(newItems[b].remaining??"")}:{stock:"",remaining:""}}); setInputs(obj); setShowPaste(false); setPasteText(""); setParseResult(null);
          setSaved(true); setTimeout(()=>setSaved(false),2000);
        } catch(e) { setDbError(`저장 실패: ${e.message}`); }
        finally { setSaving(false); }
@@ -290,7 +344,7 @@
        if (!rel.length) return {bread,totalSold:0,avgSold:0};
        const totalSold=rel.reduce((s,r)=>s+(r.items[bread].stock-r.items[bread].remaining),0);
        return {bread,totalSold,avgSold:Math.round(totalSold/rel.length*10)/10};
-     }).sort((a,b)=>b.totalSold-a.totalSold),[filteredRecords]);
+     }).sort((a,b)=>b.totalSold-a.totalSold),[filteredRecords,BREAD_LIST]);
 
      const wasteByType = useMemo(()=>{
        const calc=(fn)=>BREAD_LIST.map(bread=>{
@@ -302,7 +356,7 @@
            wasteRate:totalStock>0?Math.round((totalWaste/totalStock)*100):0};
        }).sort((a,b)=>b.totalWaste-a.totalWaste);
        return {weekday:calc(d=>!isWeekend(d)),weekend:calc(d=>isWeekend(d))};
-     },[filteredRecords]);
+     },[filteredRecords,BREAD_LIST]);
 
      const soldoutRanking = useMemo(()=>BREAD_LIST.map(bread=>{
        const rel=filteredRecords.filter(r=>r.items?.[bread]);
@@ -311,7 +365,7 @@
        return {bread,soldoutCount:so.length,soldoutRate:Math.round((so.length/rel.length)*100),
          wkdCount:so.filter(r=>!isWeekend(r.date)).length,
          wkeCount:so.filter(r=>isWeekend(r.date)).length,total:rel.length};
-     }).filter(b=>b.soldoutCount>0).sort((a,b)=>b.soldoutRate-a.soldoutRate),[filteredRecords]);
+     }).filter(b=>b.soldoutCount>0).sort((a,b)=>b.soldoutRate-a.soldoutRate),[filteredRecords,BREAD_LIST]);
 
      const weekdayStats = useMemo(()=>{
        const wkd={},wke={};
@@ -329,14 +383,14 @@
          weekdayAvg:wkd[bread].count>0?Math.round(wkd[bread].sold/wkd[bread].count*10)/10:0,
          weekendAvg:wke[bread].count>0?Math.round(wke[bread].sold/wke[bread].count*10)/10:0,
        })).sort((a,b)=>(b.weekdayAvg+b.weekendAvg)-(a.weekdayAvg+a.weekendAvg));
-     },[filteredRecords]);
+     },[filteredRecords,BREAD_LIST]);
 
      const recentTrend = useMemo(()=>filteredRecords.slice(-14).map(r=>{
        let sold=0; Object.values(r.items||{}).forEach(it=>{sold+=it.stock-it.remaining});
        return {date:r.date.slice(5),총판매:sold,type:isWeekend(r.date)?"주말":"평일"};
      }),[filteredRecords]);
 
-     const recommendation = useMemo(()=>calcRecommendation(filteredRecords,recDate),[filteredRecords,recDate]);
+     const recommendation = useMemo(()=>calcRecommendation(filteredRecords,recDate,BREAD_LIST),[filteredRecords,recDate,BREAD_LIST]);
 
      const S={
        card:{background:"#fff",borderRadius:12,padding:16,marginBottom:14,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"},
@@ -419,7 +473,7 @@
                {showPaste && (
                  <div style={{...S.card,border:"2px solid #D4A97A"}}>
                    <div style={{fontWeight:700,color:"#5C3317",marginBottom:4,fontSize:14}}>💬 카카오톡 메시지 붙여넣기</div>
-                   <div style={{fontSize:12,color:"#C27A3A",marginBottom:10}}>✓ 40+20개→60개 자동계산 &nbsp;✓ 품절→0개 &nbsp;✓ 왁뿌/러스크 자동매칭</div>
+                   <div style={{fontSize:12,color:"#C27A3A",marginBottom:10}}>✓ 40+20개→60개 자동계산 &nbsp;✓ 품절→0개 &nbsp;✓ 처음 보는 상품은 확인 후 자동등록</div>
                    <textarea value={pasteText} onChange={e=>setPasteText(e.target.value)}
                      placeholder={"06 03 오픈\n오사카 시오빵 / 40개+20개\n왁뿌 망고 요거트 시오빵 / 12개+1개\n메론 산도 / 품절"}
                      style={{width:"100%",height:130,padding:10,border:"1.5px solid #D4A97A",borderRadius:8,fontSize:13,resize:"vertical",boxSizing:"border-box",fontFamily:"inherit",lineHeight:1.6}}/>
@@ -436,10 +490,15 @@
                            <span style={{fontWeight:600,color:qty===0?"#C62828":"#2E7D32"}}>{qty===0?"품절(0개)":`${qty}개`}</span>
                          </div>
                        ))}
-                       {parseResult.unmatched?.length>0 && (
-                         <div style={{marginTop:8,fontSize:12,color:"#E65100",background:"#FFF3E0",padding:"6px 10px",borderRadius:6}}>⚠️ 매칭 안 된 품목: {parseResult.unmatched.join(", ")}</div>
+                       {parseResult.newProducts?.length>0 && (
+                         <div style={{marginTop:8,fontSize:12,color:"#1565C0",background:"#E3F2FD",padding:"8px 10px",borderRadius:6}}>
+                           🆕 새 상품: {parseResult.newProducts.join(", ")}<br/>적용할 때 상품 목록 등록 여부를 확인합니다.
+                         </div>
                        )}
-                       <button onClick={applyResult} style={{...S.btn(false),marginTop:10,padding:"10px",fontSize:14}}>✅ 적용하기</button>
+                       {parseResult.invalid?.length>0 && (
+                         <div style={{marginTop:8,fontSize:12,color:"#E65100",background:"#FFF3E0",padding:"6px 10px",borderRadius:6}}>⚠️ 수량을 읽지 못한 품목: {parseResult.invalid.join(", ")}</div>
+                       )}
+                       <button onClick={applyResult} style={{...S.btn(false),marginTop:10,padding:"10px",fontSize:14}}>✅ {parseResult.newProducts?.length?"새 상품 등록 후 적용":"적용하기"}</button>
                      </div>
                    )}
                  </div>
@@ -448,16 +507,17 @@
                <div style={{display:"grid",gridTemplateColumns:"1fr 90px 90px 65px",gap:6,padding:"8px 10px",background:"#C27A3A",borderRadius:"10px 10px 0 0",color:"#fff",fontWeight:600,fontSize:13}}>
                  <div>빵 이름</div><div style={{textAlign:"center"}}>입고</div><div style={{textAlign:"center"}}>잔여</div><div style={{textAlign:"center"}}>판매율</div>
                </div>
+               {BREAD_LIST.length===0 && <div style={{padding:18,textAlign:"center",color:"#A08060",background:"#fff"}}>등록된 상품이 없습니다. 단톡 메시지를 붙여넣어 첫 상품을 등록해주세요.</div>}
                {BREAD_LIST.map((bread,i)=>{
-                 const s=parseInt(inputs[bread].stock),r=parseInt(inputs[bread].remaining);
+                 const s=parseInt(inputs[bread]?.stock),r=parseInt(inputs[bread]?.remaining);
                  const sold=(!isNaN(s)&&!isNaN(r))?s-r:null;
                  const rate=(sold!==null&&s>0)?Math.round((sold/s)*100):null;
                  return (
                    <div key={bread} style={{display:"grid",gridTemplateColumns:"1fr 90px 90px 65px",gap:6,padding:"8px 10px",alignItems:"center",background:i%2===0?"#fff":"#FDF0E4",border:"1px solid #EDD8BF",borderTop:"none"}}>
                      <div style={{fontWeight:500,color:"#5C3317",fontSize:12,lineHeight:1.4}}>{bread}</div>
-                     <input type="number" min="0" placeholder="0" value={inputs[bread].stock} onChange={e=>handleInput(bread,"stock",e.target.value)}
+                     <input type="number" min="0" placeholder="0" value={inputs[bread]?.stock??""} onChange={e=>handleInput(bread,"stock",e.target.value)}
                        style={{width:"100%",padding:"5px 4px",border:"1.5px solid #D4A97A",borderRadius:6,fontSize:14,textAlign:"center",background:"#FFFAF5",boxSizing:"border-box"}}/>
-                     <input type="number" min="0" placeholder="0" value={inputs[bread].remaining} onChange={e=>handleInput(bread,"remaining",e.target.value)}
+                     <input type="number" min="0" placeholder="0" value={inputs[bread]?.remaining??""} onChange={e=>handleInput(bread,"remaining",e.target.value)}
                        style={{width:"100%",padding:"5px 4px",border:"1.5px solid #D4A97A",borderRadius:6,fontSize:14,textAlign:"center",background:"#FFFAF5",boxSizing:"border-box"}}/>
                      <div style={{textAlign:"center",fontWeight:700,fontSize:13,color:rate===null?"#CCC":rate>=80?"#2E7D32":rate>=50?"#F57C00":"#C62828"}}>
                        {rate!==null?`${rate}%`:"-"}
