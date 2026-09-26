@@ -96,10 +96,15 @@
     async function loadData() {
      const {data,error}=await supabaseClient
        .from("inventory_records")
-       .select("record_date,branch,items")
+       .select("record_date,branch,items,remaining_source,remaining_time,is_estimated_close")
        .order("record_date",{ascending:true});
      if (error) throw error;
-     return (data||[]).map(r=>({date:r.record_date,branch:r.branch,items:r.items||{}}));
+     return (data||[]).map(r=>({
+       date:r.record_date,branch:r.branch,items:r.items||{},
+       remaining_source:r.remaining_source||null,
+       remaining_time:r.remaining_time||null,
+       is_estimated_close:Boolean(r.is_estimated_close)
+     }));
     }
     async function loadProducts() {
      const {data,error}=await supabaseClient
@@ -125,6 +130,9 @@
        record_date:record.date,
        branch:record.branch,
        items:record.items,
+       remaining_source:record.remaining_source||null,
+       remaining_time:record.remaining_time||null,
+       is_estimated_close:Boolean(record.is_estimated_close),
        updated_at:new Date().toISOString()
      },{onConflict:"record_date,branch"});
      if (error) throw error;
@@ -150,7 +158,12 @@
        if (!m) m = line.match(/(\d{1,2})[.\/\s]\s*(\d{1,2})/);
        if (m) { date=`${new Date().getFullYear()}-${String(m[1]).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`; break; }
      }
-     const type = text.includes("마감")?"remaining":"stock";
+     const isEstimatedClose=/(17\s*시|17:00|오후\s*5\s*시)/.test(text);
+     const isNormalClose=/마감/.test(text);
+     const isOpen=/오픈|입고/.test(text);
+     const type=(isNormalClose||isEstimatedClose)?"remaining":isOpen?"stock":null;
+     const remainingSource=isEstimatedClose?"17시 재고":isNormalClose?"정상 마감":null;
+     const remainingTime=isEstimatedClose?"17:00":null;
      const items={}, newProducts=[], invalid=[];
      for (const line of lines) {
        const m=line.match(/^(.+?)\s*\/\s*(.+)$/);
@@ -163,7 +176,7 @@
        if (!mapped&&!newProducts.includes(productName)) newProducts.push(productName);
        items[productName]=qty;
      }
-     return {date,type,items,newProducts,invalid,success:Object.keys(items).length>0};
+     return {date,type,items,newProducts,invalid,isEstimatedClose,remainingSource,remainingTime,success:Boolean(type)&&Object.keys(items).length>0};
     }
 
     function calcRecommendation(records, targetDate, breadList) {
@@ -273,7 +286,7 @@
          const s=parseInt(inputs[b]?.stock), r=parseInt(inputs[b]?.remaining);
          if (!isNaN(s)&&!isNaN(r)) items[b]={stock:s,remaining:r};
        });
-       const record={date,branch,items};
+       const record={date,branch,items,remaining_source:"직접 입력",remaining_time:null,is_estimated_close:false};
        setSaving(true); setDbError("");
        try {
          await upsertRecord(record);
@@ -298,13 +311,15 @@
        setParseError(""); setParseResult(null);
        if (!pasteText.trim()) return;
        const result=parseKakao(pasteText,products);
+       if (!result.type){setParseError("보고 유형을 확인하지 못했어요. 메시지에 '오픈', '마감', '17시', '17:00' 또는 '오후 5시'가 포함되어야 해요."); return;}
        if (!result.success){setParseError("품목을 찾지 못했어요. '품목명 / 수량개' 형식인지 확인해주세요."); return;}
        setParseResult(result);
      }
 
      async function applyResult(){
        if (!parseResult) return;
-       const {date:d,type,items,newProducts=[]}=parseResult;
+       const {date:d,type,items,newProducts=[],isEstimatedClose,remainingSource,remainingTime}=parseResult;
+       if (isEstimatedClose&&!window.confirm("17시 재고 보고입니다.\n\n마감재고 대체값으로 저장할까요?\n17시 이후 판매량은 반영되지 않습니다.")) return;
        if (newProducts.length&&!window.confirm(`새로운 상품 ${newProducts.length}개가 발견됐어요.\n\n${newProducts.join("\n")}\n\n상품 목록에 등록하고 계속할까요?`)) return;
        const existing=records.find(r=>r.date===d && r.branch===branch);
        const newItems={...(existing?.items||{})};
@@ -312,7 +327,12 @@
          if (!newItems[bread]) newItems[bread]={stock:0,remaining:0};
          if (type==="stock") newItems[bread].stock=qty; else newItems[bread].remaining=qty;
        });
-       const record={date:d,branch,items:newItems};
+       const record={
+         date:d,branch,items:newItems,
+         remaining_source:type==="remaining"?remainingSource:(existing?.remaining_source||null),
+         remaining_time:type==="remaining"?remainingTime:(existing?.remaining_time||null),
+         is_estimated_close:type==="remaining"?Boolean(isEstimatedClose):Boolean(existing?.is_estimated_close)
+       };
        setSaving(true); setDbError("");
        try {
          let activeBreadList=BREAD_LIST;
@@ -335,7 +355,8 @@
        finally { setSaving(false); }
      }
 
-     const hasRecord = records.some(r=>r.date===date && r.branch===branch);
+     const currentRecord = records.find(r=>r.date===date && r.branch===branch);
+     const hasRecord = Boolean(currentRecord);
      const filteredRecords = useMemo(()=>branch===ALL_BRANCHES?records:records.filter(r=>r.branch===branch),[records,branch]);
      const hasEnoughData = filteredRecords.length>=7;
 
@@ -459,6 +480,12 @@
                  </div>
                </div>
 
+               {currentRecord?.is_estimated_close && (
+                 <div style={{background:"#FFF3E0",border:"1px solid #FFB74D",color:"#E65100",padding:"9px 12px",borderRadius:8,marginBottom:12,fontSize:12}}>
+                   ⚠️ 이 날짜의 잔여재고는 {currentRecord.remaining_time?.slice(0,5)||"17:00"} 기준 마감 대체자료입니다. 이후 판매량은 반영되지 않았습니다.
+                 </div>
+               )}
+
                {showDeleteConfirm && (
                  <div style={{...S.card,border:"2px solid #EF9A9A",background:"#FFF8F8"}}>
                    <div style={{fontWeight:700,color:"#C62828",marginBottom:6,fontSize:14}}>🗑️ {date} 기록을 삭제할까요?</div>
@@ -482,8 +509,13 @@
                    {parseResult && (
                      <div style={{marginTop:12,background:"#F0FFF4",borderRadius:8,padding:12,border:"1px solid #A5D6A7"}}>
                        <div style={{fontWeight:700,color:"#2E7D32",marginBottom:8,fontSize:13}}>
-                         ✅ {parseResult.date} ({getDayLabel(parseResult.date)}요일) — {parseResult.type==="stock"?"오픈 입고":"마감 잔여"} {Object.keys(parseResult.items).length}개 품목
+                         ✅ {parseResult.date} ({getDayLabel(parseResult.date)}요일) — {parseResult.type==="stock"?"오픈 입고":parseResult.isEstimatedClose?"17시 재고(마감 대체)":"마감 잔여"} {Object.keys(parseResult.items).length}개 품목
                        </div>
+                       {parseResult.isEstimatedClose && (
+                         <div style={{marginBottom:8,fontSize:12,color:"#E65100",background:"#FFF3E0",padding:"8px 10px",borderRadius:6}}>
+                           ⚠️ 17시 이후 판매량이 빠질 수 있어 정상 마감자료와 구분하여 저장됩니다.
+                         </div>
+                       )}
                        {Object.entries(parseResult.items).map(([bread,qty])=>(
                          <div key={bread} style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"4px 0",borderBottom:"1px solid #C8E6C9"}}>
                            <span>{bread}</span>
