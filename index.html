@@ -227,7 +227,9 @@
        reader.onerror=()=>reject(new Error("엑셀파일을 읽지 못했습니다."));
        reader.onload=e=>{
          try {
-           const workbook=window.XLSX.read(e.target.result,{type:"array",cellDates:true});
+           // 날짜를 Date 객체로 바꾸면 브라우저 시간대에 따라 하루가 이동할 수 있으므로
+           // 엑셀 일련번호 그대로 읽은 뒤 SSF로 변환한다.
+           const workbook=window.XLSX.read(e.target.result,{type:"array",cellDates:false});
            const sheet=workbook.Sheets["재고 데이터"]||workbook.Sheets[workbook.SheetNames[0]];
            if (!sheet) throw new Error("엑셀에서 데이터 시트를 찾지 못했습니다.");
            const rows=window.XLSX.utils.sheet_to_json(sheet,{header:1,defval:null,raw:true});
