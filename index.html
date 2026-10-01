@@ -43,7 +43,11 @@
      "얼그레이 무화과 산도", "초코 바나나 산도", "왁뿌 망고 요거트 시오"
     ];
 
-    const BRANCH_LIST = ["강동점", "용인점", "하남 신세계", "롯데백화점 청량리점", "대전 신세계점"];
+    const BRANCH_LIST = ["강동 본점", "용인점", "대전 신세계점", "하남 신세계"];
+    const branchLabel = name => name === "하남 신세계" ? "하남 신세계점" : name;
+    function requireBranch(name) {
+      if (!BRANCH_LIST.includes(name)) throw new Error("기록할 직영점을 선택해주세요.");
+    }
     const ALL_BRANCHES = "전체 지점";
 
     const STATIC_ALIAS = {
@@ -112,11 +116,19 @@
     const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
     async function loadData() {
-     const {data,error}=await supabaseClient
-       .from("inventory_records")
-       .select("record_date,branch,items,remaining_source,remaining_time,is_estimated_close")
-       .order("record_date",{ascending:true});
-     if (error) throw error;
+     // Supabase의 기본 응답 행 제한에 걸리지 않도록 페이지별 조회
+     const data=[];
+     for (let offset=0;;offset+=500) {
+       const {data:page,error}=await supabaseClient
+         .from("inventory_records")
+         .select("record_date,branch,items,remaining_source,remaining_time,is_estimated_close")
+         .in("branch",BRANCH_LIST)
+         .order("record_date",{ascending:true}).order("branch",{ascending:true})
+         .range(offset,offset+499);
+       if (error) throw error;
+       data.push(...(page||[]));
+       if (!page || page.length<500) break;
+     }
      return (data||[]).map(r=>({
        date:r.record_date,branch:r.branch,items:r.items||{},
        remaining_source:r.remaining_source||null,
@@ -156,6 +168,7 @@
      return "시오빵";
     }
     async function upsertRecord(record) {
+     requireBranch(record.branch);
      const {error}=await supabaseClient.from("inventory_records").upsert({
        record_date:record.date,
        branch:record.branch,
@@ -168,6 +181,7 @@
      if (error) throw error;
     }
     async function deleteRecord(recordDate,recordBranch) {
+     requireBranch(recordBranch);
      const {error}=await supabaseClient
        .from("inventory_records")
        .delete()
@@ -178,6 +192,7 @@
 
     async function insertRecords(records) {
      if (!records.length) return;
+     records.forEach(r=>requireBranch(r.branch));
      const rows=records.map(record=>({
        record_date:record.date,
        branch:record.branch,
@@ -222,6 +237,7 @@
      return Number.isFinite(n)&&n>=0?n:null;
     }
     function parseInventoryWorkbook(file, cutoffDate, targetBranch, existingRecords, existingProducts) {
+     requireBranch(targetBranch);
      return new Promise((resolve,reject)=>{
        const reader=new FileReader();
        reader.onerror=()=>reject(new Error("엑셀파일을 읽지 못했습니다."));
@@ -275,7 +291,7 @@
            }));
            const skippedRecords=allRecords.filter(r=>existingKeys.has(`${r.date}|||${r.branch}`));
            const newRecords=allRecords.filter(r=>!existingKeys.has(`${r.date}|||${r.branch}`));
-           resolve({fileName:file.name,sourceRows,excludedAfterCutoff,invalidRows,openMissing,closeMissing,zeroOpen,stockouts,
+           resolve({targetBranch,fileName:file.name,sourceRows,excludedAfterCutoff,invalidRows,openMissing,closeMissing,zeroOpen,stockouts,
              allRecords,newRecords,skippedRecords,productNames:[...productNames].sort((a,b)=>a.localeCompare(b,"ko")),warnings});
          } catch(error) {reject(error);}
        };
@@ -370,7 +386,7 @@
      const [records, setRecords] = useState([]);
      const [products, setProducts] = useState([]);
      const [loading, setLoading] = useState(true);
-     const [branch, setBranch] = useState(BRANCH_LIST[0]);
+     const [branch, setBranch] = useState("하남 신세계");
      const [tab, setTab] = useState("record");
      const [date, setDate] = useState(toDateStr(new Date()));
      const [inputs, setInputs] = useState({});
@@ -378,7 +394,7 @@
      const [showPaste, setShowPaste] = useState(false);
      const [showExcelImport, setShowExcelImport] = useState(false);
      const [excelBranch, setExcelBranch] = useState("하남 신세계");
-     const [excelCutoff, setExcelCutoff] = useState("2026-07-31");
+     const [excelCutoff, setExcelCutoff] = useState(toDateStr(new Date()));
      const [excelPreview, setExcelPreview] = useState(null);
      const [excelError, setExcelError] = useState("");
      const [excelImporting, setExcelImporting] = useState(false);
@@ -433,6 +449,7 @@
      }
      async function applyExcelImport() {
        if (!excelPreview||excelImporting) return;
+       if (excelPreview.targetBranch!==excelBranch) {setExcelError("등록 지점이 변경됐습니다. 파일을 다시 선택해주세요.");return;}
        if (!excelPreview.newRecords.length) {setExcelResult({inserted:0,skipped:excelPreview.skippedRecords.length,newProducts:0});return;}
        const known=new Set(products.map(p=>p.name));
        const newNames=excelPreview.productNames.filter(name=>!known.has(name));
@@ -452,14 +469,18 @@
          setRecords(prev=>[...prev,...excelPreview.newRecords].sort((a,b)=>a.date.localeCompare(b.date)||a.branch.localeCompare(b.branch,"ko")));
          setExcelResult({inserted:excelPreview.newRecords.length,skipped:excelPreview.skippedRecords.length,newProducts:newNames.length});
          setExcelPreview(null);
-       } catch(error) {setExcelError(`일괄 등록 실패: ${error.message}`);}
+       } catch(error) {
+         setExcelError(`일괄 등록 실패: ${error.message}. 저장된 기록을 다시 확인한 뒤 파일을 재선택해주세요.`);
+         setExcelPreview(null);
+         try {setRecords(await loadData());} catch(e) {setDbError(`새로고침 실패: ${e.message}`);}
+       }
        finally {setExcelImporting(false);}
      }
      async function handleSave(){
        const items={};
        BREAD_LIST.forEach(b=>{
          const s=parseInt(inputs[b]?.stock), r=parseInt(inputs[b]?.remaining);
-         if (!isNaN(s)&&!isNaN(r)) items[b]={stock:s,remaining:r};
+         if (!isNaN(s)||!isNaN(r)) items[b]={stock:isNaN(s)?null:s,remaining:isNaN(r)?null:r};
        });
        const record={date,branch,items,remaining_source:"직접 입력",remaining_time:null,is_estimated_close:false};
        setSaving(true); setDbError("");
@@ -499,7 +520,7 @@
        const existing=records.find(r=>r.date===d && r.branch===branch);
        const newItems={...(existing?.items||{})};
        Object.entries(items).forEach(([bread,qty])=>{
-         if (!newItems[bread]) newItems[bread]={stock:0,remaining:0};
+         if (!newItems[bread]) newItems[bread]={stock:null,remaining:null};
          if (type==="stock") newItems[bread].stock=qty; else newItems[bread].remaining=qty;
        });
        const record={
@@ -533,7 +554,24 @@
      const currentRecord = records.find(r=>r.date===date && r.branch===branch);
      const hasRecord = Boolean(currentRecord);
      const filteredRecords = useMemo(()=>branch===ALL_BRANCHES?records:records.filter(r=>r.branch===branch),[records,branch]);
-     const hasEnoughData = filteredRecords.length>=7;
+     const distinctDays = new Set(filteredRecords.map(r=>r.date)).size;
+     const branchPredictions = useMemo(()=>BRANCH_LIST.map(name=>{
+       const rows=records.filter(r=>r.branch===name&&r.date<recDate);
+       const days=new Set(rows.map(r=>r.date)).size;
+       const eligible=days>=7;
+       const values=eligible?calcRecommendation(rows.filter(r=>r.date<recDate),recDate,BREAD_LIST):[];
+       return {name,days,eligible,values,hasPrediction:values.some(v=>v.qty!==null)};
+     }),[records,recDate,BREAD_LIST]);
+     const hasEnoughData = branch===ALL_BRANCHES
+       ? branchPredictions.some(p=>p.eligible) : Boolean(branchPredictions.find(p=>p.name===branch)?.eligible);
+     const branchSummary = useMemo(()=>BRANCH_LIST.map(name=>{
+       const rows=records.filter(r=>r.branch===name);
+       let sold=0,remaining=0;
+       rows.forEach(r=>Object.values(r.items||{}).forEach(it=>{
+         if(hasValidDemand(it)&&it.stock>0){sold+=it.stock-it.remaining;remaining+=it.remaining;}
+       }));
+       return {name,days:rows.length,sold,remaining};
+     }),[records]);
 
      const soldRanking = useMemo(()=>BREAD_LIST.map(bread=>{
        const rel=filteredRecords.filter(r=>hasValidDemand(r.items?.[bread])&&r.items[bread].stock>0);
@@ -587,7 +625,17 @@
        return {date:r.date.slice(5),총판매:sold,type:isWeekend(r.date)?"주말":"평일"};
      }),[filteredRecords]);
 
-     const recommendation = useMemo(()=>calcRecommendation(filteredRecords,recDate,BREAD_LIST),[filteredRecords,recDate,BREAD_LIST]);
+     const recommendation = useMemo(()=>{
+       if(branch!==ALL_BRANCHES) return calcRecommendation(filteredRecords.filter(r=>r.date<recDate),recDate,BREAD_LIST);
+       // 지점별 예측을 먼저 계산. 미관측 지점을 수요 0으로 취급하지 않음.
+       return BREAD_LIST.map(bread=>{
+         const available=branchPredictions.map(p=>({name:p.name,value:p.values.find(v=>v.bread===bread)}))
+           .filter(p=>p.value?.qty!==null && p.value?.qty!==undefined);
+         return {bread,qty:available.length?available.reduce((s,p)=>s+p.value.qty,0):null,
+           avgSold:available.length?Math.round(available.reduce((s,p)=>s+p.value.avgSold,0)*10)/10:null,
+           hasSoldout:available.some(p=>p.value.hasSoldout),coverage:available.length};
+       });
+     },[filteredRecords,recDate,BREAD_LIST,branch,branchPredictions]);
 
      const S={
        card:{background:"#fff",borderRadius:12,padding:16,marginBottom:14,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"},
@@ -608,17 +656,19 @@
        <div style={{fontFamily:"'Noto Sans KR',sans-serif",background:"#FDF6EE",minHeight:"100vh"}}>
          <div style={{background:"linear-gradient(135deg,#8B4513 0%,#C27A3A 100%)",color:"#fff",padding:"18px 20px 14px"}}>
            <div style={{fontSize:21,fontWeight:700}}>🍞 시오사쿠 재고관리</div>
-           <div style={{fontSize:12,opacity:0.85,marginTop:2}}>전체 {records.length}건 저장됨 · {branch===ALL_BRANCHES?"전체 지점 통합 보기":`${branch} ${filteredRecords.length}일치`}</div>
+           <div style={{fontSize:12,opacity:0.85,marginTop:2}}>전체 {records.length}건 저장됨 · {branch===ALL_BRANCHES?"전체 지점 통합 보기":`${branchLabel(branch)} ${filteredRecords.length}일치`}</div>
            <div style={{marginTop:10}}>
-             <select value={branch} onChange={e=>{setBranch(e.target.value);setShowPaste(false);setShowExcelImport(false);setParseResult(null);}}
+             <select value={branch} disabled={saving||excelImporting} onChange={e=>{setBranch(e.target.value);if(e.target.value!==ALL_BRANCHES)setExcelBranch(e.target.value);
+                 setShowPaste(false);setShowExcelImport(false);setParseResult(null);setPasteText("");
+                 setExcelPreview(null);setExcelResult(null);setExcelError("");}}
                style={{width:"100%",padding:"9px 10px",borderRadius:8,border:"none",fontSize:14,fontWeight:700,color:"#5C3317",background:"#FFF6EA"}}>
-               {BRANCH_LIST.map(b=><option key={b} value={b}>{b}</option>)}
+               {BRANCH_LIST.map(b=><option key={b} value={b}>{branchLabel(b)}</option>)}
                <option value={ALL_BRANCHES}>📊 {ALL_BRANCHES} (통합 보기)</option>
              </select>
            </div>
          </div>
          <div style={{display:"flex",background:"#fff",borderBottom:"2px solid #F0E4D4"}}>
-           {[["record","📋 재고 기록"],["stats","📊 판매 분석"],["rec","🧮 생산량 추천"]].map(([k,l])=>(
+           {[["record","📋 재고 기록"],["stats","📊 판매 분석"],["rec","🧮 수요예측·입고 추천"]].map(([k,l])=>(
              <button key={k} onClick={()=>setTab(k)} style={S.tab(tab===k)}>{l}</button>
            ))}
          </div>
@@ -648,7 +698,7 @@
                      style={{padding:"7px 12px",background:showPaste?"#8B4513":"#FDF0E4",color:showPaste?"#fff":"#8B4513",border:"1.5px solid #C27A3A",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
                      💬 단톡
                    </button>
-                   <button onClick={()=>{setShowExcelImport(!showExcelImport);setShowPaste(false);setExcelPreview(null);setExcelError("");setExcelResult(null)}}
+                   <button onClick={()=>{setExcelBranch(branch);setShowExcelImport(!showExcelImport);setShowPaste(false);setExcelPreview(null);setExcelError("");setExcelResult(null)}}
                      style={{padding:"7px 12px",background:showExcelImport?"#2E7D32":"#F0FFF4",color:showExcelImport?"#fff":"#2E7D32",border:"1.5px solid #66BB6A",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
                      엑셀
                    </button>
@@ -684,24 +734,24 @@
                    <div style={{fontSize:12,color:"#558B2F",marginBottom:12}}>기존 날짜는 덮어쓰지 않고 자동으로 건너뜁니다.</div>
                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
                      <label style={{fontSize:12,color:"#5C3317"}}>등록 지점
-                       <select value={excelBranch} onChange={e=>{setExcelBranch(e.target.value);setExcelPreview(null);setExcelResult(null)}}
+                       <select value={excelBranch} disabled={excelImporting} onChange={e=>{setExcelBranch(e.target.value);setExcelPreview(null);setExcelResult(null)}}
                          style={{display:"block",width:"100%",marginTop:4,padding:"8px",border:"1px solid #A5D6A7",borderRadius:7,background:"#fff"}}>
-                         {BRANCH_LIST.map(b=><option key={b} value={b}>{b}</option>)}
+                         {BRANCH_LIST.map(b=><option key={b} value={b}>{branchLabel(b)}</option>)}
                        </select>
                      </label>
                      <label style={{fontSize:12,color:"#5C3317"}}>마지막 등록 날짜
-                       <input type="date" value={excelCutoff} onChange={e=>{setExcelCutoff(e.target.value);setExcelPreview(null);setExcelResult(null)}}
+                       <input type="date" value={excelCutoff} disabled={excelImporting} onChange={e=>{setExcelCutoff(e.target.value);setExcelPreview(null);setExcelResult(null)}}
                          style={{display:"block",width:"100%",boxSizing:"border-box",marginTop:4,padding:"7px",border:"1px solid #A5D6A7",borderRadius:7,background:"#fff"}}/>
                      </label>
                    </div>
                    <label style={{display:"block",padding:"12px",border:"2px dashed #81C784",borderRadius:8,textAlign:"center",color:"#2E7D32",fontSize:13,fontWeight:600,cursor:"pointer",background:"#F1F8E9"}}>
                      엑셀파일 선택
-                     <input type="file" accept=".xlsx,.xls" onChange={handleExcelFile} style={{display:"none"}}/>
+                     <input type="file" accept=".xlsx,.xls" disabled={excelImporting} onChange={handleExcelFile} style={{display:"none"}}/>
                    </label>
                    {excelError && <div style={{marginTop:10,color:"#C62828",fontSize:12,background:"#FFF0F0",padding:"9px 10px",borderRadius:7}}>⚠️ {excelError}</div>}
                    {excelPreview && (
                      <div style={{marginTop:12,border:"1px solid #A5D6A7",borderRadius:8,padding:12,background:"#fff"}}>
-                       <div style={{fontWeight:700,color:"#2E7D32",fontSize:13,marginBottom:8}}>{excelPreview.fileName}</div>
+                       <div style={{fontWeight:700,color:"#2E7D32",fontSize:13,marginBottom:8}}>{branchLabel(excelPreview.targetBranch)} · {excelPreview.fileName}</div>
                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 12px",fontSize:12,color:"#555"}}>
                          <div>품목 행 <b>{excelPreview.sourceRows}개</b></div>
                          <div>대상 날짜 <b>{excelPreview.allRecords.length}일</b></div>
@@ -745,7 +795,7 @@
                    {parseResult && (
                      <div style={{marginTop:12,background:"#F0FFF4",borderRadius:8,padding:12,border:"1px solid #A5D6A7"}}>
                        <div style={{fontWeight:700,color:"#2E7D32",marginBottom:8,fontSize:13}}>
-                         ✅ {parseResult.date} ({getDayLabel(parseResult.date)}요일) — {parseResult.type==="stock"?"오픈 입고":parseResult.isEstimatedClose?"17시 재고(마감 대체)":"마감 잔여"} {Object.keys(parseResult.items).length}개 품목
+                         ✅ {branchLabel(branch)} · {parseResult.date} ({getDayLabel(parseResult.date)}요일) — {parseResult.type==="stock"?"오픈 입고":parseResult.isEstimatedClose?"17시 재고(마감 대체)":"마감 잔여"} {Object.keys(parseResult.items).length}개 품목
                        </div>
                        {parseResult.isEstimatedClose && (
                          <div style={{marginBottom:8,fontSize:12,color:"#E65100",background:"#FFF3E0",padding:"8px 10px",borderRadius:6}}>
@@ -800,10 +850,19 @@
              </div>
            )}
 
+           {branch===ALL_BRANCHES && tab!=="record" && (
+             <div style={S.card}>
+               <div style={{fontWeight:700,color:"#5C3317",marginBottom:10}}>직영점별 누적 현황</div>
+               <div style={{fontSize:12,color:"#795548",marginBottom:10}}>지점별 기록 기간이 달라 누적 판매량을 같은 기간의 성과로 비교할 수는 없습니다.</div>
+               {branchSummary.map(p=><div key={p.name} style={{padding:"10px 0",borderBottom:"1px solid #EDD8BF",fontSize:13}}>
+                 <b>{branchLabel(p.name)}</b><span style={{float:"right"}}>{p.days?`${p.days}일 · 판매 ${p.sold}개 · 잔여 ${p.remaining}개`:"데이터 없음"}</span>
+               </div>)}
+             </div>
+           )}
            {/* stats 탭 */}
            {tab==="stats" && (
              <div>
-                {records.length<2 ? (
+                {distinctDays<2 ? (
                   <div style={{textAlign:"center",padding:"60px 20px",color:"#A08060"}}>
                     <div style={{fontSize:48}}>📊</div>
                     <div style={{marginTop:12,fontWeight:600}}>아직 데이터가 부족해요</div>
@@ -819,7 +878,7 @@
                          <div style={{flex:1}}>
                            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
                              <span style={{fontSize:13}}>{b.bread}</span>
-                             <span style={{fontSize:12,color:"#888"}}>총 {b.totalSold}개 &nbsp;<span style={{fontWeight:700,color:"#8B4513"}}>평균 {b.avgSold}개/일</span></span>
+                             <span style={{fontSize:12,color:"#888"}}>총 {b.totalSold}개 &nbsp;<span style={{fontWeight:700,color:"#8B4513"}}>평균 {b.avgSold}개/{branch===ALL_BRANCHES?"지점·일":"일"}</span></span>
                            </div>
                            <div style={{height:5,background:"#F0E4D4",borderRadius:3,overflow:"hidden"}}>
                              <div style={{height:"100%",width:`${Math.min((b.totalSold/(soldRanking[0]?.totalSold||1))*100,100)}%`,background:"#C27A3A",borderRadius:3}}/>
@@ -832,21 +891,38 @@
              </div>
            )}
 
+           {tab==="stats" && distinctDays>=2 && (
+             <div style={S.card}>
+               <div style={{fontWeight:700,color:"#5C3317",marginBottom:10}}>평일·주말 평균 판매량</div>
+               <div style={{fontSize:12,color:"#795548",marginBottom:10}}>주말은 토·일 기준입니다. 공휴일 별도 분류는 아직 적용되지 않았습니다.</div>
+               <div style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",fontSize:12,gap:8}}>
+                 <b>상품</b><b>평일</b><b>주말</b>
+                 {weekdayStats.filter(p=>p.weekdayAvg>0||p.weekendAvg>0).map(p=><React.Fragment key={p.bread}>
+                   <span>{p.bread}</span><span>{p.weekdayAvg}개</span><span>{p.weekendAvg}개</span>
+                 </React.Fragment>)}
+               </div>
+               {branch===ALL_BRANCHES && <div style={{fontSize:11,color:"#795548",marginTop:10}}>평균은 상품별 유효 지점·일 기록 기준입니다.</div>}
+             </div>
+           )}
            {/* rec 탭 */}
            {tab==="rec" && (
              <div style={S.card}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
-                  <div style={{fontWeight:700,color:"#5C3317",fontSize:15}}>🧮 생산량 추천</div>
+                  <div style={{fontWeight:700,color:"#5C3317",fontSize:15}}>🧮 수요예측·입고 추천</div>
                   <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
                     <input type="date" value={recDate} onChange={e=>setRecDate(e.target.value)}
                       style={{border:"1.5px solid #D4A97A",borderRadius:8,padding:"6px 10px",fontSize:13,color:"#5C3317"}}/>
                     <span style={{fontSize:12,color:"#A08060"}}>({getDayLabel(recDate)}요일)</span>
                   </div>
                 </div>
+                <div style={{fontSize:12,color:"#795548",marginBottom:12,lineHeight:1.7}}>
+                  최근 동일 요일 판매량에 여유분을 더한 입고 추천입니다. 품절로 놓친 수요는 직접 관측되지 않습니다.
+                  {branch===ALL_BRANCHES && <div>지점별 추천량을 합산합니다. 미반영 지점: {branchPredictions.filter(p=>!p.hasPrediction).map(p=>branchLabel(p.name)).join(", ")||"없음"}. 미반영 지점의 수요는 합계에 포함되지 않습니다.</div>}
+                </div>
                 {!hasEnoughData ? (
                   <div style={{background:"#FFF8E1",borderRadius:10,padding:"14px 16px",border:"1px solid #FFE082"}}>
                     <div style={{fontWeight:700,color:"#F57C00",marginBottom:4,fontSize:14}}>⏳ 데이터를 더 쌓아주세요</div>
-                    <div style={{fontSize:13,color:"#795548"}}>7일 이상 기록이 누적되어야 정밀 추천 시스템이 가동됩니다. (현재 {records.length}일 기록됨)</div>
+                    <div style={{fontSize:13,color:"#795548"}}>선택한 지점에 7일 이상 기록이 있어야 추천을 계산합니다. (현재 {distinctDays}일 기록됨)</div>
                   </div>
                 ) : (
                   (() => {
@@ -870,7 +946,7 @@
                                 {r.bread}
                                 {r.hasSoldout && <span style={{marginLeft:6,fontSize:11,color:"#C62828",background:"#FFF0F0",padding:"2px 6px",borderRadius:6}}>품절 잦음</span>}
                               </div>
-                              <div style={{fontSize:11,color:"#A08060",marginTop:2}}>평균 판매 {r.avgSold}개</div>
+                              <div style={{fontSize:11,color:"#A08060",marginTop:2}}>{branch===ALL_BRANCHES?"지점별 기준 판매량 합계":"평균 판매"} {r.avgSold}개{branch===ALL_BRANCHES?` · ${r.coverage}/4개 지점 반영`:""}</div>
                             </div>
                             <div style={{fontSize:20,fontWeight:700,color:"#8B4513"}}>{r.qty}개</div>
                           </div>
