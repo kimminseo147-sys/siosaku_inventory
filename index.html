@@ -36,11 +36,11 @@
     const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
 
     const DEFAULT_PRODUCTS = [
-     "오사카 시오빵", "오사카 크랙 시오빵", "버터떡", "두바이 시오빵", "불닭 시오빵", "멜론 시오빵",
+     "오사카 시오빵", "오사카 크랙 시오빵", "버터떡", "두바이 시오빵", "불닭마요 시오빵", "멜론 시오빵",
      "야끼소바 시오빵", "명란 시오빵", "갈릭 시오빵", "쪽파 시오빵", "피자 시오빵", "앙버터 크림 시오빵",
      "모카 시오빵", "우유 시오빵", "시오빵 러스크", "미니 쇼쿠판",
      "딸기 산도", "망고 산도", "멜론 산도", "복숭아 요거트 산도", "후르츠 산도",
-     "얼그레이 무화과 산도", "초코 바나나 산도", "왁뿌 망고 요거트 시오"
+     "무화과 산도", "초코 바나나 산도", "왁뿌 망고 요거트 시오"
     ];
 
     const BRANCH_LIST = ["강동 본점", "용인점", "대전 신세계점", "하남 신세계"];
@@ -63,6 +63,52 @@
      "왁뿌망고요거트시오":"왁뿌 망고 요거트 시오","왁뿌 망고 요거트":"왁뿌 망고 요거트 시오",
      "왁뿌":"왁뿌 망고 요거트 시오","요거트 시오":"왁뿌 망고 요거트 시오","망고 요거트":"왁뿌 망고 요거트 시오",
     };
+
+    // 강동점 검수 매핑(원문 138종 및 사용자 확정 추가 규칙). 데이터베이스를 자동 수정하지 않음.
+    const GANGDONG_ALIASES = {"갈릭 시오빵":"갈릭 시오빵","갈릭 애비 시오빵":"갈릭애비 시오빵","갈릭애비 시오빵":"갈릭애비 시오빵","감귤 모찌 산도":"감귤 모찌 산도","감귤모찌 산도":"감귤 모찌 산도","고구마 햄 치즈 시오빵":"고구마 햄치즈 시오빵","고구마 햄치즈 시오빵":"고구마 햄치즈 시오빵","고르곤졸라":"고르곤졸라 시오빵","골든 키위 산도":"골든 키위 산도","감귤 산도":"귤 산도","감귤산도":"귤 산도","귤 산도":"귤 산도","돈카츠 산도":"돈카츠 산도","두바이 딸기 산도":"두바이 딸기 산도","딸기 두바이 산도":"두바이 딸기 산도","딸기두바이 산도":"두바이 딸기 산도","초코 가나슈 두바이 딸기 산도":"두바이 딸기 산도","초코 가나슈 두바이 산도":"두바이 딸기 산도","두바이":"두바이 시오빵","두바이 가나슈 시오빵":"두바이 시오빵","두바이 시오빵":"두바이 시오빵","두바이 초코 시오빵":"두바이 시오빵","딸기 모찌 산도":"딸기 모찌 산도","딸기 바나나 산도":"딸기 바나나 산도","딸기바나나산도":"딸기 바나나 산도","요거트 딸기바나나산도":"딸기 바나나 산도","딸기 산도":"딸기 산도","딸기 생크림 시오빵":"딸기 생크림 시오빵","딸기 요거트 시오빵":"딸기 요거트 시오빵","딸기모찌 산도":"딸기 모찌 산도","딸기파인애플산도":"딸기파인애플산도","레드키위 산도":"레드키위 산도","레드키위산도":"레드키위 산도","마론 쇼쿠판":"마론 쇼쿠판","말차":"말차 시오빵","말차 시오빵":"말차 시오빵","망고 산도":"망고 산도","망고산도":"망고 산도","메론 산도":"메론 산도","메론산도":"메론 산도","메론 시오빵":"메론 시오빵","명란 시오빵":"명란 시오빵","명란시오":"명란 시오빵","명란시오빵":"명란 시오빵","모모 시오빵":"모모 시오빵","모카 시오빵":"모카 시오빵","모카 크림":"모카 시오빵","모카시오빵":"모카 시오빵","무화과 산도":"무화과 산도","무화과산도":"무화과 산도","미니 쇼쿠판":"미니 쇼쿠판","미니 시오빵":"미니 시오빵","바나나 산도":"바나나 산도","바나나산도":"바나나 산도","버터떡":"버터떡","복숭아산도":"복숭아 산도","불닭 시오빵":"불닭마요 시오빵","불닭마요 시오빵":"불닭마요 시오빵","불닭시오빵":"불닭마요 시오빵","블루베리 크림치즈 시오빵":"블루베리 크림치즈 시오빵","뿌링클 콘치즈 시오빵":"뿌링클 콘치즈 시오빵","샤인머스켓 산도":"샤인머스켓 산도","샤인머스켓산도":"샤인머스켓 산도","소보로 시오빵":"소보로 시오빵","소세지 시오빵":"소시지 시오빵","핫도그 소시지 시오빵":"소시지 시오빵","쇼쿠판":"쇼쿠판","아몬드 쫀득 시오빵":"아몬드 쫀득 시오빵","앙버터 시오빵":"앙버터 크림 시오빵","앙버터 크림 시오빵":"앙버터 크림 시오빵","애플 망고 산도":"애플 망고 산도","야끼소바":"야끼소바 시오빵","야끼소바 시오빵":"야끼소바 시오빵","얼그레이 무화과":"무화과 산도","얼그레이 무화과산도":"무화과 산도","얼그레이 복숭아 산도":"얼그레이 복숭아 산도","얼그레이":"얼그레이 시오빵","오렌지 산도":"오렌지 산도","오렌지산도":"오렌지 산도","오사카 시오빵":"오사카 시오빵","오사카 크랙 시오빵":"오사카 크랙 시오빵","옥수수 크림 시오빵":"옥수수 크림 시오빵","왁뿌 망고 요거트":"왁뿌 망고 요거트 시오빵","왁뿌 망고 요거트 시오빵":"왁뿌 망고 요거트 시오빵","왁뿌망고요거트 시오빵":"왁뿌 망고 요거트 시오빵","요거트 딸기 산도":"요거트 딸기 산도","바나나 요거트산도":"요거트 바나나 산도","요거트 바나나산도":"요거트 바나나 산도","복숭아 요거트 산도":"요거트 복숭아 산도","복숭아 요거트산도":"요거트 복숭아 산도","요거트 복숭아산도":"요거트 복숭아 산도","요거트복숭아산도":"요거트 복숭아 산도","요거트 샤인머스켓":"요거트 샤인머스켓 산도","요거트샤인머스켓산도":"요거트 샤인머스켓 산도","요거트 파인애플산도":"요거트 파인애플산도","우유 시오빵":"우유 크림 시오빵","우유 크림":"우유 크림 시오빵","우유 크림 시오빵":"우유 크림 시오빵","잠봉뵈르":"잠봉뵈르 시오빵","잠봉뵈르 시오빵":"잠봉뵈르 시오빵","쪽파 시오빵":"쪽파 시오빵","체리 초코산도":"체리 초코산도","초코 가나슈 딸기 산도":"초코 가나슈 딸기 산도","초코가나슈 딸기":"초코 가나슈 딸기 산도","초코가나슈 딸기산도":"초코 가나슈 딸기 산도","초코가나슈 딸기바나나산도":"초코 가나슈 딸기바나나 산도","초코 가나슈 바나나 산도":"초코 가나슈 바나나 산도","초코 가나슈 바나나산도":"초코 가나슈 바나나 산도","초코가나슈 바나나산도":"초코 가나슈 바나나 산도","초코 가나슈 체리 산도":"초코 가나슈 체리 산도","바나나 초코산도":"초코 바나나 산도","초코 바나나":"초코 바나나 산도","초코 바나나 산도":"초코 바나나 산도","초코 바나나산도":"초코 바나나 산도","초코 크랙 시오빵":"초코 크랙 시오빵","초코 시오빵":"초코 크림 시오빵","초코 크림":"초코 크림 시오빵","초코 크림 시오빵":"초코 크림 시오빵","초코크림 시오빵":"초코 크림 시오빵","칠리스 시오빵":"칠리스 시오빵","카스테라 시오빵":"카스테라 시오빵","카스테라시오빵":"카스테라 시오빵","카스테러 시오빵":"카스테라 시오빵","키위 산도":"키위 산도","키위산도":"키위 산도","타코 시오빵":"타코 시오빵","파인애플 산도":"파인애플 산도","파인애플산도":"파인애플 산도","페레레로쉐 초코 크림 시오빵":"페레레로쉐 초코 크림 시오빵","피자 시오빵":"피자 시오빵","피자시오빵":"피자 시오빵","후루츠 산도":"후르츠 산도","후르츠 산도":"후르츠 산도","후르츠산도":"후르츠 산도","밤티 말빵":null,"밤티말빵":null,"초초크림":null,"파인애플 요거트":null,"얼그레이 무화과 산도":"무화과 산도","왁뿌 망고 요거트 시오":"왁뿌 망고 요거트 시오빵"};
+    const GANGDONG_EXCLUDED = new Set(["밤티말빵","초초크림","파인애플 요거트"]);
+    const GANGDONG_START = "2026-03-01";
+    const GANGDONG_END = "2026-09-30";
+    const normalizeKey = value => String(value ?? "").replace(/\s+/g, "").trim();
+    const GANGDONG_KEY_LOOKUP = Object.fromEntries(Object.entries(GANGDONG_ALIASES).map(([k,v])=>[normalizeKey(k),v]));
+    function mapProduct(rawName, products, branchName) {
+      const clean=normalizeProductName(String(rawName||""));
+      if (!clean) return {name:null,reason:"상품명 누락"};
+      if (branchName==="강동 본점") {
+        const key=normalizeKey(clean);
+        if (Object.prototype.hasOwnProperty.call(GANGDONG_KEY_LOOKUP,key)) {
+          const name=GANGDONG_KEY_LOOKUP[key];
+          return name ? {name} : {name:null,reason:"확정 제외 상품"};
+        }
+        return {name:null,reason:"표준화 미확정 상품: "+clean};
+      }
+      // 다른 지점은 기존 상품 목록의 정확/공백 무시 일치만 허용
+      const key=normalizeKey(clean);
+      for (const p of products) {
+        if (normalizeKey(p.name)===key) return {name:p.name};
+        for(const alias of Array.isArray(p.aliases)?p.aliases:[]) if(normalizeKey(alias)===key) return {name:p.name};
+      }
+      if (Object.prototype.hasOwnProperty.call(STATIC_ALIAS,clean)) return {name:STATIC_ALIAS[clean]};
+      return {name:clean,newProduct:true};
+    }
+    function canonicalViewItems(record) {
+      if(record.branch!=="강동 본점") return record.items||{};
+      const result={}, originals={};
+      for(const [raw,item] of Object.entries(record.items||{})) {
+        const mapped=mapProduct(raw,[],"강동 본점");
+        if(!mapped.name) continue;
+        const name=mapped.name;
+        if (Object.prototype.hasOwnProperty.call(result,name)) {
+          // 겹치는 기존 DB 자료는 판매량으로 계산하지 않고 검토 필요로 표시
+          result[name]={stock:null,remaining:null,quality_issue:"상품명 병합 충돌"};
+        } else {result[name]=record.is_estimated_close?{...item,remaining:null,quality_issue:"17시 마감 대체"}:item;}
+        originals[name]=true;
+      }
+      return result;
+    }
+    function isTrustedItem(item,record) {
+      return hasValidDemand(item) && item.stock>0 && !item.quality_issue && !record.is_estimated_close;
+    }
 
     function normalizeProductName(rawName) {
      return rawName.replace(/\s+/g," ").trim();
@@ -212,7 +258,7 @@
     function getDayLabel(s) { return DAYS[new Date(s+"T00:00:00").getDay()]; }
     function isWeekend(s) { const d=new Date(s+"T00:00:00").getDay(); return d===0||d===6; }
     function hasValidDemand(item) {
-     return item&&Number.isFinite(item.stock)&&Number.isFinite(item.remaining)&&item.stock>=0&&item.remaining>=0&&item.remaining<=item.stock;
+     return item&&!item.quality_issue&&Number.isFinite(item.stock)&&Number.isFinite(item.remaining)&&item.stock>=0&&item.remaining>=0&&item.remaining<=item.stock;
     }
     function excelDateToString(value) {
      if (value instanceof Date&&!isNaN(value)) return toDateStr(value);
@@ -262,10 +308,12 @@
              const excelRow=headerIndex+2+offset;
              const recordDate=excelDateToString(row[idx.date]);
              const rawProduct=normalizeProductName(String(row[idx.product]??""));
-             const product=rawProduct?(exactProductMatch(rawProduct,existingProducts)||rawProduct):"";
+             const productResult=mapProduct(rawProduct,existingProducts,targetBranch);
+              const product=productResult.name;
              if (!recordDate&&!rawProduct) return;
              if (!recordDate||!rawProduct) {invalidRows++;warnings.push(`${excelRow}행: 날짜 또는 상품명 누락`);return;}
-             if (recordDate>cutoffDate) {excludedAfterCutoff++;return;}
+              if(!product) {standardizationSkipped++;warnings.push(`${excelRow}행: ${productResult.reason}`);return;}
+             if (recordDate>cutoffDate || (targetBranch==="강동 본점" && recordDate<GANGDONG_START)) {excludedAfterCutoff++;return;}
              const stock=parseExcelNumber(row[idx.stock]);
              const remaining=parseExcelNumber(row[idx.remaining]);
              if (stock===null) openMissing++;
@@ -299,7 +347,7 @@
      });
     }
 
-    function parseKakao(text, products) {
+    function parseKakao(text, products, targetBranch) {
      const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
      let date = toDateStr(new Date());
      for (const line of lines) {
@@ -318,7 +366,7 @@
        const m=line.match(/^(.+?)\s*\/\s*(.+)$/);
        if (!m) continue;
        const rawName=normalizeProductName(m[1]);
-       const mapped=fuzzyMatch(rawName,products);
+       const mapped=mapProduct(rawName,products,targetBranch);
        const qty=parseQty(m[2].trim());
        if (!Number.isFinite(qty)) { invalid.push(rawName); continue; }
        const productName=mapped||rawName;
@@ -408,7 +456,11 @@
      const [recDate, setRecDate] = useState(toDateStr(new Date(Date.now()+86400000)));
      const [dbError, setDbError] = useState("");
      const [saving, setSaving] = useState(false);
-     const BREAD_LIST = useMemo(()=>products.filter(p=>p.active!==false).map(p=>p.name),[products]);
+     const BREAD_LIST = useMemo(()=>{
+        const names=products.filter(p=>p.active!==false).map(p=>p.name);
+        if(branch!=="강동 본점") return names;
+        return [...new Set(names.map(n=>mapProduct(n,products,"강동 본점").name).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ko"));
+      },[products,branch]);
 
      useEffect(()=>{
        let cancelled=false;
@@ -477,6 +529,11 @@
        finally {setExcelImporting(false);}
      }
      async function handleSave(){
+       if(branch==="강동 본점") {
+         const prior=records.find(r=>r.date===date&&r.branch===branch);
+         const legacy=Object.keys(prior?.items||{}).filter(raw=>mapProduct(raw,[],branch).name!==raw);
+         if(legacy.length){setDbError("기존 기록에 비표준/제외 상품이 있어 안전을 위해 저장을 중단했습니다. 원본 백업 후 검토: "+legacy.slice(0,5).join(", "));return;}
+       }
        const items={};
        BREAD_LIST.forEach(b=>{
          const s=parseInt(inputs[b]?.stock), r=parseInt(inputs[b]?.remaining);
@@ -506,9 +563,10 @@
      function handleParse(){
        setParseError(""); setParseResult(null);
        if (!pasteText.trim()) return;
-       const result=parseKakao(pasteText,products);
+       const result=parseKakao(pasteText,products,branch);
        if (!result.type){setParseError("보고 유형을 확인하지 못했어요. 메시지에 '오픈', '마감', '17시', '17:00' 또는 '오후 5시'가 포함되어야 해요."); return;}
-       if (!result.success){setParseError("품목을 찾지 못했어요. '품목명 / 수량개' 형식인지 확인해주세요."); return;}
+       if (result.invalid.length){setParseError("미확정·중복·수량 오류가 있어 자동 저장을 중단했습니다: "+result.invalid.join(" / ")); return;}
+        if (!result.success){setParseError("품목을 찾지 못했어요. '품목명 / 수량개' 형식인지 확인해주세요."); return;}
        setParseResult(result);
      }
 
@@ -518,6 +576,10 @@
        if (isEstimatedClose&&!window.confirm("17시 재고 보고입니다.\n\n마감재고 대체값으로 저장할까요?\n17시 이후 판매량은 반영되지 않습니다.")) return;
        if (newProducts.length&&!window.confirm(`새로운 상품 ${newProducts.length}개가 발견됐어요.\n\n${newProducts.join("\n")}\n\n상품 목록에 등록하고 계속할까요?`)) return;
        const existing=records.find(r=>r.date===d && r.branch===branch);
+       if(branch==="강동 본점" && existing){
+         const legacy=Object.keys(existing.items||{}).filter(raw=>mapProduct(raw,[],branch).name!==raw);
+         if(legacy.length){setDbError("기존 보고의 비표준/제외 상품과 자동 병합하지 않습니다. 원본 백업 후 검토: "+legacy.slice(0,5).join(", "));return;}
+       }
        const newItems={...(existing?.items||{})};
        Object.entries(items).forEach(([bread,qty])=>{
          if (!newItems[bread]) newItems[bread]={stock:null,remaining:null};
@@ -553,28 +615,29 @@
 
      const currentRecord = records.find(r=>r.date===date && r.branch===branch);
      const hasRecord = Boolean(currentRecord);
-     const filteredRecords = useMemo(()=>branch===ALL_BRANCHES?records:records.filter(r=>r.branch===branch),[records,branch]);
+     const analysisRecords = useMemo(()=>records.map(r=>({...r,items:canonicalViewItems(r)})),[records]);
+      const filteredRecords = useMemo(()=>branch===ALL_BRANCHES?analysisRecords:analysisRecords.filter(r=>r.branch===branch),[analysisRecords,branch]);
      const distinctDays = new Set(filteredRecords.map(r=>r.date)).size;
      const branchPredictions = useMemo(()=>BRANCH_LIST.map(name=>{
-       const rows=records.filter(r=>r.branch===name&&r.date<recDate);
+       const rows=analysisRecords.filter(r=>r.branch===name&&r.date<recDate);
        const days=new Set(rows.map(r=>r.date)).size;
        const eligible=days>=7;
        const values=eligible?calcRecommendation(rows.filter(r=>r.date<recDate),recDate,BREAD_LIST):[];
        return {name,days,eligible,values,hasPrediction:values.some(v=>v.qty!==null)};
-     }),[records,recDate,BREAD_LIST]);
+     }),[analysisRecords,recDate,BREAD_LIST]);
      const hasEnoughData = branch===ALL_BRANCHES
        ? branchPredictions.some(p=>p.eligible) : Boolean(branchPredictions.find(p=>p.name===branch)?.eligible);
      const branchSummary = useMemo(()=>BRANCH_LIST.map(name=>{
-       const rows=records.filter(r=>r.branch===name);
+       const rows=analysisRecords.filter(r=>r.branch===name);
        let sold=0,remaining=0;
        rows.forEach(r=>Object.values(r.items||{}).forEach(it=>{
-         if(hasValidDemand(it)&&it.stock>0){sold+=it.stock-it.remaining;remaining+=it.remaining;}
+         if(isTrustedItem(it,r)){sold+=it.stock-it.remaining;remaining+=it.remaining;}
        }));
        return {name,days:rows.length,sold,remaining};
-     }),[records]);
+     }),[analysisRecords]);
 
      const soldRanking = useMemo(()=>BREAD_LIST.map(bread=>{
-       const rel=filteredRecords.filter(r=>hasValidDemand(r.items?.[bread])&&r.items[bread].stock>0);
+       const rel=filteredRecords.filter(r=>isTrustedItem(r.items?.[bread],r));
        if (!rel.length) return {bread,totalSold:0,avgSold:0};
        const totalSold=rel.reduce((s,r)=>s+(r.items[bread].stock-r.items[bread].remaining),0);
        return {bread,totalSold,avgSold:Math.round(totalSold/rel.length*10)/10};
@@ -582,7 +645,7 @@
 
      const wasteByType = useMemo(()=>{
        const calc=(fn)=>BREAD_LIST.map(bread=>{
-         const rel=filteredRecords.filter(r=>hasValidDemand(r.items?.[bread])&&r.items[bread].stock>0&&fn(r.date));
+         const rel=filteredRecords.filter(r=>isTrustedItem(r.items?.[bread],r)&&fn(r.date));
          if (!rel.length) return {bread,totalWaste:0,avgWaste:0,wasteRate:0};
          const totalWaste=rel.reduce((s,r)=>s+r.items[bread].remaining,0);
          const totalStock=rel.reduce((s,r)=>s+r.items[bread].stock,0);
@@ -593,7 +656,7 @@
      },[filteredRecords,BREAD_LIST]);
 
      const soldoutRanking = useMemo(()=>BREAD_LIST.map(bread=>{
-       const rel=filteredRecords.filter(r=>hasValidDemand(r.items?.[bread])&&r.items[bread].stock>0);
+       const rel=filteredRecords.filter(r=>isTrustedItem(r.items?.[bread],r));
        if (!rel.length) return {bread,soldoutCount:0,soldoutRate:0,wkdCount:0,wkeCount:0,total:0};
        const so=rel.filter(r=>r.items[bread].remaining===0);
        return {bread,soldoutCount:so.length,soldoutRate:Math.round((so.length/rel.length)*100),
@@ -607,7 +670,7 @@
        filteredRecords.forEach(r=>{
          const wknd=isWeekend(r.date);
          Object.entries(r.items||{}).forEach(([bread,it])=>{
-           if (!wkd[bread]||!wke[bread]||!hasValidDemand(it)||it.stock===0) return;
+           if (!wkd[bread]||!wke[bread]||!isTrustedItem(it,r)) return;
            const sold=it.stock-it.remaining;
            if (wknd){wke[bread].sold+=sold;wke[bread].count++;}
            else{wkd[bread].sold+=sold;wkd[bread].count++;}
@@ -621,7 +684,7 @@
      },[filteredRecords,BREAD_LIST]);
 
      const recentTrend = useMemo(()=>filteredRecords.slice(-14).map(r=>{
-       let sold=0; Object.values(r.items||{}).forEach(it=>{if(hasValidDemand(it)&&it.stock>0)sold+=it.stock-it.remaining});
+       let sold=0; Object.values(r.items||{}).forEach(it=>{if(isTrustedItem(it,r))sold+=it.stock-it.remaining});
        return {date:r.date.slice(5),총판매:sold,type:isWeekend(r.date)?"주말":"평일"};
      }),[filteredRecords]);
 
@@ -731,7 +794,7 @@
                {showExcelImport && (
                  <div style={{...S.card,border:"2px solid #81C784",background:"#FBFFFC"}}>
                    <div style={{fontWeight:700,color:"#1B5E20",marginBottom:4,fontSize:14}}>엑셀 일괄 등록</div>
-                   <div style={{fontSize:12,color:"#558B2F",marginBottom:12}}>기존 날짜는 덮어쓰지 않고 자동으로 건너뜁니다.</div>
+                   <div style={{fontSize:12,color:"#558B2F",marginBottom:12}}>기존 날짜는 덮어쓰지 않습니다. 강동점은 2026-03-01 이후 데이터만 받으며, 미확정 상품은 제외·검토합니다.</div>
                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
                      <label style={{fontSize:12,color:"#5C3317"}}>등록 지점
                        <select value={excelBranch} disabled={excelImporting} onChange={e=>{setExcelBranch(e.target.value);setExcelPreview(null);setExcelResult(null)}}
